@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -47,13 +51,28 @@ def test_health_and_readiness() -> None:
 
 
 def test_model_info() -> None:
+    """
+    The exposed threshold must match the shipped config rather than a
+    hardcoded constant. Pinning a literal here made this test fail the
+    moment the operating point was retuned, which is a property of the
+    test rather than of the API.
+    """
+
+    config = json.loads(
+        (Path(__file__).resolve().parents[1] / "models" / "model_config.json")
+        .read_text(encoding="utf-8")
+    )
+
     with TestClient(app) as client:
         response = client.get("/model-info")
         assert response.status_code == 200
         body = response.json()
         assert body["model_type"] == "XGBClassifier"
         assert body["feature_count"] == 22
-        assert body["default_threshold"] == 0.5
+        assert body["default_threshold"] == pytest.approx(
+            config["default_threshold"]
+        )
+        assert 0.0 < body["default_threshold"] < 1.0
 
 
 def test_json_prediction() -> None:

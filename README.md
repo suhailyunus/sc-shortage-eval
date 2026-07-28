@@ -81,28 +81,83 @@ The dataset is publicly available and widely used for benchmarking retail demand
 
 ## Results at a Glance
 
-| Metric | Default Early-Warning Threshold |
-|---|---:|
-| Final model | XGBoost |
-| Validation design | Chronological holdout |
-| Accuracy | **0.67** |
-| Stress precision | **0.14** |
-| Stress recall | **0.61** |
-| Stress F1 | **0.23** |
-| Average Precision | **≈0.19** |
+Stress events occur in **8.85%** of holdout observations. That base rate
+is the reference point for everything below: a model that predicts "no
+stress" for every row scores **91.15% accuracy** and is useless. Accuracy
+is therefore not reported as a headline metric.
 
-At the alternative F1-maximizing threshold (**≈0.64**), precision increases to roughly **0.21** and F1 to **0.26**, while recall falls to approximately **0.33**. The default threshold is retained because early detection is the principal business objective.
+**Validation design.** Training covers days 8-1531 (1,208,200 rows);
+the holdout covers days 1532-1913 (381,892 rows). No day appears in
+both. Every item-store series appears on both sides, so the model is
+evaluated on the future of series it has seen - not on unseen items.
 
-## Why This Project Stands Out
+### Ranking quality
 
-- **Production-style structure:** reusable logic lives in `src/`, not only in a notebook.
-- **Leakage-safe temporal features:** lags and rolling statistics use prior observations only.
-- **Item-store demand histories:** features are grouped by both item and store.
-- **Chronological validation:** future observations are held out rather than randomly mixed.
-- **Imbalance-aware modeling:** XGBoost uses training-period class weights.
-- **Explainability:** SHAP shows the direction and magnitude of feature effects.
-- **Operational thresholding:** the alert cutoff is tied to business trade-offs.
-- **Repeatable inference:** saved model artifacts and feature metadata support future scoring.
+| Metric | Value | Reference |
+|---|---:|---|
+| Average precision | **0.2225** | 0.0885 if ranked at random (**2.51x lift**) |
+| Precision @ top 100 alerts | **0.520** | 5.9x base rate |
+| Precision @ top 1000 alerts | **0.479** | 5.4x base rate |
+
+### Does it beat a heuristic?
+
+The relevant question is not whether the model beats random, but whether
+it beats the obvious rule: *flag an item if yesterday's sales were already
+above its stress threshold.* Compared at approximately equal alert volume:
+
+| At ~34k alerts | Precision | Recall |
+|---|---:|---:|
+| Persistence heuristic | 0.2021 | 0.2017 |
+| XGBoost (threshold 0.70) | **0.2688** | **0.2806** |
+
+For the same analyst workload, the model produces **33% fewer false
+alarms** and catches **39% more stress events**. This is the project's
+central result.
+
+### Operating points
+
+The threshold is an operations decision, not a modeling one. Any cutoff
+implicitly asserts a cost ratio between a false alarm and a missed event,
+and no such ratio exists for this dataset. The curve is the deliverable:
+
+| Threshold | Alerts/day | Precision | Recall |
+|---:|---:|---:|---:|
+| 0.70 | ~92 | 0.269 | 0.281 |
+| 0.75 | ~57 | 0.305 | 0.197 |
+| **0.80** | **~30** | **0.355** | **0.120** |
+| 0.85 | ~12 | 0.415 | 0.055 |
+| 0.90 | ~2 | 0.478 | 0.011 |
+
+**The shipped default is 0.80**, chosen for reviewability rather than for
+maximum F1. F1 weights precision and recall equally, which asserts that a
+missed event and a false alarm cost the same; optimizing it yields ~140
+alerts per day, a volume unlikely to be reviewed at all. At 0.80 roughly
+one alert in three is a real event and one analyst can clear the queue.
+
+The cost is stated plainly: **recall at this threshold is 0.12, so 29,747
+of 33,800 stress events are missed.** This model is a prioritization aid,
+not a detection system.
+
+Scores are not calibrated probabilities. `scale_pos_weight` shifts them
+upward by construction, so "0.80" is a rank cutoff rather than an
+80% likelihood.
+
+## Engineering Practices
+
+- **Reusable logic in `src/`** rather than only in a notebook, so training
+  and inference share the same feature code.
+- **Leakage-safe temporal features.** Lags and rolling statistics use
+  strictly prior observations, enforced by tests in `tests/test_leakage.py`
+  that perturb future values and assert past features are unchanged.
+- **Time-based holdout.** The split cuts on `day_num`, so every training
+  observation precedes every test observation.
+- **Training-period label definition.** The stress threshold is estimated
+  from training days only; using the full sample would define labels with
+  sales that had not yet occurred.
+- **Imbalance-aware modeling** with training-period class weights.
+- **SHAP explanations** for feature effect direction and magnitude.
+- **Saved feature schema and operating threshold** alongside the model
+  artifact, so deployment cannot silently drift from training.
 
 ## Architecture
 
@@ -134,8 +189,6 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 
 ### SHAP Summary
 
-Save the final SHAP beeswarm as `reports/figures/shap_summary.png`, then it will render here:
-
 <p align="center">
   <img src="reports/figures/shap_summary.png" alt="SHAP Summary" width="82%">
 </p>
@@ -144,11 +197,26 @@ Save the final SHAP beeswarm as `reports/figures/shap_summary.png`, then it will
 
 ```text
 .
-├── data/raw/                                  # Retail sales, calendar, and pricing data
+├── .devcontainer/devcontainer.json            # Reproducible dev environment
+├── .github/workflows/ci.yml                   # Lint, tests, and compose smoke test
+├── api/
+│   ├── main.py                                # FastAPI application
+│   └── schemas.py                             # Request and response models
+├── data/raw/                                  # M5 sales, calendar, and pricing data (not tracked)
+├── docs/images/                               # Interface screenshots
+├── examples/
+│   ├── sample_input.csv                       # Example batch scoring input
+│   └── sample_request.json                    # Example JSON prediction payload
+├── frontend/
+│   ├── app.py                                 # Streamlit interface
+│   └── requirements.txt
 ├── models/                                    # Generated model artifacts
+│   ├── final_xgboost_supply_stress.ubj
+│   ├── model_config.json                      # Operating threshold and metadata
+│   └── model_features.json                    # Feature schema contract
 ├── notebooks/
-│   ├── supply_stress_prediction_case_study.ipynb
-│   └── archive/                               # Local drafts; ignored by Git
+│   └── supply_stress_prediction_case_study.ipynb
+├── paper_draft/project_notes.md               # Working notes and design decisions
 ├── reports/figures/
 │   ├── readme_banner.png
 │   ├── pipeline_architecture.png
@@ -156,16 +224,29 @@ Save the final SHAP beeswarm as `reports/figures/shap_summary.png`, then it will
 │   ├── precision_recall_curve.png
 │   ├── confusion_matrix.png
 │   └── shap_summary.png
+├── scripts/
+│   ├── report_metrics.py                      # Full evaluation report against baselines
+│   └── retrain_and_save.py                    # Retrain and write deployment artifacts
 ├── src/
-│   ├── load_data.py
-│   ├── preprocess.py
-│   ├── features.py
-│   ├── train.py
-│   ├── evaluate.py
-│   ├── predict.py
-│   └── pipeline.py
-├── project_notes.md
-├── requirements.txt
+│   ├── load_data.py                           # Raw file loading
+│   ├── preprocess.py                          # Analytical table and stress target
+│   ├── features.py                            # Leakage-safe temporal features
+│   ├── train.py                               # Time-based split and model fitting
+│   ├── evaluate.py                            # Metrics and figures
+│   ├── predict.py                             # Batch scoring from saved artifacts
+│   └── pipeline.py                            # End-to-end training orchestration
+├── tests/
+│   ├── test_api.py                            # API contract tests
+│   └── test_leakage.py                        # Temporal validity regression tests
+├── Dockerfile                                 # API image
+├── Dockerfile.frontend                        # Streamlit image
+├── compose.yaml                               # Local API and frontend stack
+├── pyproject.toml                             # Tooling configuration
+├── requirements.txt                           # Core modeling dependencies
+├── requirements-api.txt                       # API runtime dependencies
+├── requirements-frontend.txt                  # Streamlit dependencies
+├── requirements-dev.txt                       # Test and lint dependencies
+├── LICENSE
 └── README.md
 ```
 
@@ -191,7 +272,8 @@ All demand features are isolated by `item_id` and `store_id`, and rolling featur
 4. Engineer temporal and geographic features.
 5. Benchmark Logistic Regression and Random Forest.
 6. Tune Random Forest and evaluate feature importance.
-7. validate using a chronological holdout.
+7. validate on a time-based holdout, cutting on `day_num` so that every
+   training observation precedes every test observation.
 8. Benchmark and tune class-balanced XGBoost.
 9. Analyze precision-recall trade-offs and thresholds.
 10. Persist the model and run reusable inference.
@@ -236,7 +318,7 @@ from src.predict import predict_supply_stress
 predictions = predict_supply_stress(
     recent_data,
     models_dir="models",
-    threshold=0.50,
+    threshold=0.80,
 )
 ```
 
@@ -250,29 +332,57 @@ Example output:
 
 ## Key Findings
 
-- Selling price was consistently one of the strongest predictive signals.
+- Selling price was consistently among the strongest predictive signals.
+- Recent demand level and volatility carried most of the remaining signal.
 - Weekends increased predicted stress risk.
-- Recent demand level and volatility were operationally meaningful.
-- Store-level variation was stronger than state-level variation.
-- An unbalanced XGBoost model produced high accuracy but almost no stress detection.
-- Class balancing improved stress recall to approximately 61%.
-- Threshold changes altered business behavior without retraining the model.
+- An unbalanced XGBoost model achieved high accuracy while detecting
+  almost no stress events - the clearest demonstration in this project
+  that accuracy is the wrong metric for a rare-event problem.
+- Class balancing raised recall substantially, at a large precision cost.
+- Threshold changes altered operating behaviour without retraining.
+- Precision is roughly flat across the top of the ranking (0.52 at the top
+  100 alerts, 0.48 at the top 1000). A sharply-ranked model would be far
+  more precise at the very top; this one is not, and no threshold recovers
+  precision above ~0.48. This is a real ceiling on the current feature set.
+- The train and holdout positive rates differ (0.0752 vs 0.0885). Because
+  the threshold is fixed from the training period, this gap reflects
+  genuine demand drift rather than an artifact of the label definition.
 
 ## Engineering Lessons
 
-- Accuracy can be misleading for rare-event classification.
-- Time-aware validation is essential for future-facing decisions.
-- Training and inference should share the same feature code.
-- Feature schemas and operating thresholds should be saved with the model.
-- A model can be most useful as a prioritized review queue rather than an autonomous decision-maker.
+- Accuracy is misleading for rare-event classification; the base rate
+  belongs next to every reported metric.
+- A model is only interesting relative to the cheapest alternative. The
+  persistence baseline was more informative than any absolute score.
+- Sort order and split logic must be verified together. A positional split
+  on an item-sorted table partitions by item while appearing chronological,
+  and no metric reveals this - only a test does.
+- Label definitions leak too. Feature-level `shift(1)` discipline does not
+  help if the target threshold is estimated over the full sample.
+- Feature schemas and operating thresholds belong with the model artifact.
+- A model can be most useful as a prioritized review queue rather than an
+  autonomous decision-maker.
 
 ## Limitations
 
-- The target is a proxy rather than a verified inventory outcome.
-- The local workflow samples the first 100 items for computational efficiency.
-- Inventory position, replenishment schedules, supplier lead times, weather, and logistics disruptions are not included.
-- Probability calibration has not yet been performed.
-- The alternative threshold was explored on the holdout and should be selected on a separate validation period in production.
+- The target is a proxy for supply stress, not a verified inventory or
+  stockout outcome. M5 contains no inventory data.
+- **The stress threshold groups by `item_id` alone, pooling across
+  stores.** High-volume stores therefore exceed their item's pooled 90th
+  percentile more often by construction, so the observed store-level
+  feature importance may partly reflect the label definition rather than
+  genuine demand behaviour. Grouping by item and store would make the
+  claim "unusually high for this item at this store"; this has not been
+  evaluated.
+- The workflow samples the first 100 items for computational tractability.
+  Results have not been validated across the full 30,490-series dataset.
+- Recall at the shipped threshold is 0.12. Most stress events are missed.
+- Predicted scores are not calibrated probabilities.
+- Inventory position, replenishment schedules, supplier lead times,
+  weather, and logistics disruptions are absent from the feature set and
+  are plausibly more predictive than anything included here.
+- Operating thresholds were selected on the holdout. In production they
+  should be chosen on a separate validation period to avoid optimistic bias.
 
 ## Future Work
 
@@ -294,6 +404,10 @@ notebooks/supply_stress_prediction_case_study.ipynb
 
 The notebook documents the complete analytical workflow, from data preparation and feature engineering through model development, explainability, threshold selection, and production inference. It serves as the technical case study accompanying the modular Python implementation contained within the `src/` package.
 
+
+## License
+
+Released under the MIT License. See [LICENSE](LICENSE).
 
 ## Acknowledgements
 
@@ -382,7 +496,7 @@ From the Swagger interface at `http://localhost:8000/docs`:
 1. Open **POST /predict-file-csv**.
 2. Select **Try it out**.
 3. Upload `examples/sample_input.csv`.
-4. Leave the threshold blank to use the saved default of `0.50`.
+4. Leave the threshold blank to use the saved default of `0.80`.
 5. Select **Execute**, then use the response **Download file** link.
 
 The downloaded `predictions.csv` contains:
@@ -393,14 +507,29 @@ The downloaded `predictions.csv` contains:
 - operational label (`No Stress` or `Stress Risk`);
 - business severity level (`Low`, `Moderate`, `High`, or `Critical`).
 
-Risk bands are defined as:
+Risk bands are derived from the configured alert threshold rather than
+from fixed cutoffs, so that severity and the alert decision stay aligned
+if the operating point is retuned. `High` and `Critical` always
+correspond to a raised alert; `Low` and `Moderate` never do.
 
-| Probability | Business risk level |
-|---:|---|
-| `< 0.30` | Low |
-| `0.30–0.59` | Moderate |
-| `0.60–0.79` | High |
-| `>= 0.80` | Critical |
+| Score | Business risk level | Alert raised |
+|---|---|---|
+| `< threshold / 2` | Low | No |
+| `threshold / 2` to `threshold` | Moderate | No |
+| `threshold` to midpoint of the remaining range | High | Yes |
+| above that midpoint | Critical | Yes |
+
+At the shipped threshold of `0.80` this resolves to:
+
+| Score | Business risk level | Alert raised |
+|---:|---|---|
+| `< 0.40` | Low | No |
+| `0.40–0.79` | Moderate | No |
+| `0.80–0.89` | High | Yes |
+| `>= 0.90` | Critical | Yes |
+
+Scores are ranking values rather than calibrated probabilities, so these
+bands express relative priority, not likelihood.
 
 ## Web Interface
 

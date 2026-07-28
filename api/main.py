@@ -99,16 +99,26 @@ def _validate_input_size(frame: pd.DataFrame) -> None:
         )
 
 
-def _risk_level(probability: float) -> str:
-    """Translate a model probability into a business-friendly severity band."""
+def _risk_level(probability: float, threshold: float) -> str:
+    """
+    Translate a model score into a business-friendly severity band.
 
-    if probability < 0.30:
-        return "Low"
-    if probability < 0.60:
-        return "Moderate"
-    if probability < 0.80:
-        return "High"
-    return "Critical"
+    Bands are derived from the configured alert threshold rather than
+    from fixed constants. Hardcoded cutoffs decouple severity from the
+    alert decision: at a 0.80 threshold, a fixed 0.60-0.80 "High" band
+    would label items that are never actually flagged, and every flagged
+    item would land in a single "Critical" bucket.
+
+    The two bands below the threshold are advisory only; the two above
+    it correspond to raised alerts, split at the midpoint of the
+    remaining score range.
+    """
+
+    if probability >= threshold:
+        critical_floor = threshold + (1.0 - threshold) / 2
+        return "Critical" if probability >= critical_floor else "High"
+
+    return "Moderate" if probability >= threshold / 2 else "Low"
 
 
 def _score_output(frame: pd.DataFrame, threshold: float | None) -> tuple[pd.DataFrame, float, str]:
@@ -154,7 +164,8 @@ def _score_output(frame: pd.DataFrame, threshold: float | None) -> tuple[pd.Data
         {0: "No Stress", 1: "Stress Risk"}
     )
     output["risk_level"] = [
-        _risk_level(float(probability)) for probability in probabilities
+        _risk_level(float(probability), operating_threshold)
+        for probability in probabilities
     ]
 
     return output, operating_threshold, str(

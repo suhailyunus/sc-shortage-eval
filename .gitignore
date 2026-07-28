@@ -31,3 +31,6 @@ Thumbs.db
 
 # Archived notebooks
 notebooks/archive/
+
+# Timestamped backups written by scripts/retrain_and_save.py
+models_backup_*/

@@ -25,6 +25,7 @@ class TrainingResult:
     y_train: pd.Series
     y_test: pd.Series
     model: object
+    split_day: int
 
 
 def run_training_pipeline(
@@ -33,24 +34,37 @@ def run_training_pipeline(
     max_items: int | None = 100,
     train_fraction: float = 0.80,
     models_dir: str | Path | None = None,
+    default_threshold: float = 0.80,
 ) -> TrainingResult:
-    """Load raw files, engineer features, train XGBoost, and optionally save it."""
+    """Load raw files, engineer features, train XGBoost, and optionally save it.
+
+    ``default_threshold`` is the score cutoff written into the deployment
+    config. It is a stated operating choice rather than an optimum: any
+    cutoff asserts a cost ratio between false alarms and missed events,
+    and no such ratio is available for this dataset. The default favours
+    a reviewable alert volume over maximum recall.
+    """
 
     raw = load_m5_data(data_dir)
-    analytical = build_analytical_table(
+    analytical, split_day = build_analytical_table(
         raw.sales,
         raw.calendar,
         raw.prices,
         max_items=max_items,
+        train_fraction=train_fraction,
     )
 
     feature_data, X, feature_names = prepare_model_input(analytical)
     y = feature_data["stress_event"]
 
+    # The same day boundary that defined the stress threshold also
+    # defines the holdout, so neither the label nor the split can be
+    # informed by observations the model has not seen.
     X_train, X_test, y_train, y_test = chronological_split(
         X,
         y,
-        train_fraction=train_fraction,
+        feature_data["day_num"],
+        split_day=split_day,
     )
 
     model = train_final_xgboost(X_train, y_train)
@@ -60,7 +74,7 @@ def run_training_pipeline(
             model,
             feature_names,
             models_dir,
-            default_threshold=0.50,
+            default_threshold=default_threshold,
         )
 
     return TrainingResult(
@@ -72,4 +86,5 @@ def run_training_pipeline(
         y_train=y_train,
         y_test=y_test,
         model=model,
+        split_day=split_day,
     )

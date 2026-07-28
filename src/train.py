@@ -9,25 +9,65 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
+from src.preprocess import find_split_day
+
 
 def chronological_split(
     X: pd.DataFrame,
     y: pd.Series,
+    day_num: pd.Series,
     *,
     train_fraction: float = 0.80,
+    split_day: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """Split already chronologically ordered data into past and future."""
+    """
+    Split into a past training period and a future holdout period.
 
-    if not 0 < train_fraction < 1:
-        raise ValueError("train_fraction must be between 0 and 1.")
+    The split is performed on ``day_num``, never on row position. The
+    analytical table is sorted by ``item_id`` before ``day_num``, so a
+    positional split would partition the data by item rather than by
+    time and would leave train and test spanning the same calendar
+    range. Every training observation is guaranteed to precede every
+    test observation.
 
-    split_index = int(len(X) * train_fraction)
+    Parameters
+    ----------
+    X, y
+        Feature matrix and target, sharing an index.
+    day_num
+        Integer day index aligned to ``X``. Must share ``X``'s index.
+    train_fraction
+        Approximate share of observations assigned to training. Ignored
+        when ``split_day`` is supplied.
+    split_day
+        Explicit last training day. Supply this to reuse an identical
+        boundary across experiments.
+    """
+
+    if not X.index.equals(y.index):
+        raise ValueError("X and y must share an identical index.")
+    if not X.index.equals(day_num.index):
+        raise ValueError("day_num must share an identical index with X.")
+
+    cutoff = (
+        int(split_day)
+        if split_day is not None
+        else find_split_day(day_num, train_fraction=train_fraction)
+    )
+
+    train_mask = day_num <= cutoff
+    test_mask = ~train_mask
+
+    if not train_mask.any():
+        raise ValueError(f"No observations fall on or before day {cutoff}.")
+    if not test_mask.any():
+        raise ValueError(f"No observations fall after day {cutoff}.")
 
     return (
-        X.iloc[:split_index].copy(),
-        X.iloc[split_index:].copy(),
-        y.iloc[:split_index].copy(),
-        y.iloc[split_index:].copy(),
+        X.loc[train_mask].copy(),
+        X.loc[test_mask].copy(),
+        y.loc[train_mask].copy(),
+        y.loc[test_mask].copy(),
     )
 
 

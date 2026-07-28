@@ -57,11 +57,34 @@ def reshape_sales_long(sales: pd.DataFrame) -> pd.DataFrame:
     return long_data
 
 
+def find_split_day(
+    day_num: pd.Series,
+    *,
+    train_fraction: float = 0.80,
+) -> int:
+    """
+    Return the last day belonging to the training period.
+
+    The cutoff is chosen so that approximately ``train_fraction`` of all
+    observations fall on or before it. Because a single day contains many
+    item-store rows, the realized fraction is only approximate; the day
+    boundary itself is exact, which is what temporal validity requires.
+    """
+
+    if not 0 < train_fraction < 1:
+        raise ValueError("train_fraction must be between 0 and 1.")
+
+    ordered_days = day_num.sort_values()
+    cutoff_position = int(len(ordered_days) * train_fraction)
+    return int(ordered_days.iloc[cutoff_position])
+
+
 def add_stress_target(
     data: pd.DataFrame,
     *,
     quantile: float = 0.90,
     grouping: tuple[str, ...] = ("item_id",),
+    threshold_cutoff_day: int | None = None,
 ) -> pd.DataFrame:
     """
     Create an item-relative high-demand stress proxy.
@@ -69,16 +92,62 @@ def add_stress_target(
     The M5 data does not contain direct inventory or stockout labels.
     This target therefore identifies unusually high sales relative to
     the selected grouping's own historical distribution.
+
+    Parameters
+    ----------
+    threshold_cutoff_day
+        When supplied, each group's quantile is estimated using only
+        observations on or before this day, and that fixed value then
+        labels the entire series. This matters: estimating the quantile
+        over the full history would define the training labels using
+        sales that had not yet occurred, and no such threshold could be
+        computed at scoring time in production. Groups with no history
+        on or before the cutoff fall back to the global training-period
+        quantile.
+
+        Passing ``None`` reproduces the original full-sample behaviour
+        and is retained only for backward compatibility. It leaks future
+        information into the label and should not be used for any result
+        that will be reported.
     """
 
     if not 0 < quantile < 1:
         raise ValueError("quantile must be strictly between 0 and 1.")
 
     df = data.copy()
-    thresholds = (
-        df.groupby(list(grouping))["sales"]
-        .transform(lambda values: values.quantile(quantile))
-    )
+    group_columns = list(grouping)
+
+    if threshold_cutoff_day is None:
+        thresholds = df.groupby(group_columns)["sales"].transform(
+            lambda values: values.quantile(quantile)
+        )
+    else:
+        if "day_num" not in df.columns:
+            raise ValueError(
+                "day_num is required when threshold_cutoff_day is supplied."
+            )
+
+        history = df.loc[df["day_num"] <= threshold_cutoff_day]
+        if history.empty:
+            raise ValueError(
+                f"No observations fall on or before day {threshold_cutoff_day}."
+            )
+
+        group_thresholds = (
+            history.groupby(group_columns)["sales"].quantile(quantile)
+        )
+        fallback = float(history["sales"].quantile(quantile))
+
+        thresholds = (
+            df[group_columns]
+            .merge(
+                group_thresholds.rename("stress_threshold").reset_index(),
+                on=group_columns,
+                how="left",
+            )["stress_threshold"]
+            .fillna(fallback)
+        )
+        thresholds.index = df.index
 
     df["stress_threshold"] = thresholds
     df["stress_event"] = (df["sales"] > df["stress_threshold"]).astype("int8")
@@ -150,19 +219,36 @@ def build_analytical_table(
     *,
     max_items: int | None = 100,
     stress_quantile: float = 0.90,
-) -> pd.DataFrame:
-    """Create the merged long-format analytical table."""
+    train_fraction: float = 0.80,
+) -> tuple[pd.DataFrame, int]:
+    """
+    Create the merged long-format analytical table.
+
+    Returns the table together with the last day of the training period.
+    The stress threshold is estimated from that period only, and callers
+    must reuse the same boundary when splitting so that no label or
+    feature is informed by the holdout.
+    """
 
     selected_sales = select_items(sales, max_items=max_items)
     long_sales = reshape_sales_long(selected_sales)
+
+    split_day = find_split_day(
+        long_sales["day_num"],
+        train_fraction=train_fraction,
+    )
+
     targeted = add_stress_target(
         long_sales,
         quantile=stress_quantile,
         grouping=("item_id",),
+        threshold_cutoff_day=split_day,
     )
     with_calendar = merge_calendar(targeted, calendar)
     with_prices = merge_prices(with_calendar, prices)
 
-    return with_prices.sort_values(
+    analytical = with_prices.sort_values(
         ["item_id", "store_id", "day_num"]
     ).reset_index(drop=True)
+
+    return analytical, split_day
