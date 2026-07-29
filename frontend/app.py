@@ -171,19 +171,28 @@ for column, label in zip(metric_columns, RISK_ORDER):
 chart_col, top_col = st.columns([1, 1.35])
 with chart_col:
     st.subheader("Risk distribution")
-    # Vega-Lite sorts nominal axis labels alphabetically, which discards the
-    # RISK_ORDER reindex above and renders Critical first. Numbering the
-    # labels makes the alphabetical sort agree with severity order, which
-    # avoids taking on a charting dependency purely to control axis order.
-    ordered_labels = {
-        level: f"{position}. {level}"
-        for position, level in enumerate(RISK_ORDER, start=1)
-    }
-    chart_data = counts.rename("Rows").to_frame()
-    chart_data.index = [
-        ordered_labels.get(level, level) for level in chart_data.index
-    ]
-    st.bar_chart(chart_data)
+    # st.bar_chart routes through Streamlit's Vega-Lite integration, which
+    # imports altair internally; altair does not import on Python 3.14.
+    # A dataframe with a progress column conveys the same distribution and
+    # depends only on Streamlit's table rendering, so it works on any
+    # supported interpreter. Row order is preserved, so severity order holds
+    # without the label-numbering workaround a nominal axis would need.
+    distribution = counts.rename("Rows").reset_index()
+    distribution.columns = ["Risk level", "Rows"]
+
+    st.dataframe(
+        distribution,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Rows": st.column_config.ProgressColumn(
+                "Rows",
+                min_value=0,
+                max_value=int(max(counts.max(), 1)),
+                format="%d",
+            )
+        },
+    )
 
 with top_col:
     st.subheader("Highest-risk observations")
