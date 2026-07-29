@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
@@ -171,8 +172,21 @@ for column, label in zip(metric_columns, RISK_ORDER):
 chart_col, top_col = st.columns([1, 1.35])
 with chart_col:
     st.subheader("Risk distribution")
-    chart_data = counts.rename("Rows").to_frame()
-    st.bar_chart(chart_data)
+    # st.bar_chart renders through Vega-Lite, which sorts nominal fields
+    # alphabetically and discards the RISK_ORDER reindex above. An explicit
+    # sort keeps the bars in severity order.
+    chart_data = counts.rename("Rows").reset_index()
+    chart_data.columns = ["Risk level", "Rows"]
+    st.altair_chart(
+        alt.Chart(chart_data)
+        .mark_bar()
+        .encode(
+            x=alt.X("Risk level:N", sort=RISK_ORDER, title=None),
+            y=alt.Y("Rows:Q", title="Rows"),
+            tooltip=["Risk level", "Rows"],
+        ),
+        use_container_width=True,
+    )
 
 with top_col:
     st.subheader("Highest-risk observations")
@@ -191,14 +205,19 @@ with top_col:
         if column in top_risk.columns
     ]
     st.dataframe(
-        top_risk[display_columns],
+        top_risk[display_columns].assign(
+            # ProgressColumn's format string is applied to the raw value, so
+            # "%.1f%%" appends a percent sign without rescaling and renders
+            # 0.908 as "0.9%". Scale here and set max_value to match.
+            stress_probability=lambda frame: frame["stress_probability"] * 100
+        ),
         use_container_width=True,
         hide_index=True,
         column_config={
             "stress_probability": st.column_config.ProgressColumn(
                 "Stress probability",
                 min_value=0.0,
-                max_value=1.0,
+                max_value=100.0,
                 format="%.1f%%",
             )
         },
