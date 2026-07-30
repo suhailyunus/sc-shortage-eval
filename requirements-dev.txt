@@ -2,3 +2,4 @@
 pytest>=8.3,<9.0
 httpx>=0.28,<1.0
 ruff>=0.11,<1.0
+mlflow>=3.0,<4.0  # optional: only used by scripts/retrain_and_save.py --mlflow

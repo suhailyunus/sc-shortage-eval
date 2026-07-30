@@ -202,6 +202,8 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 ├── api/
 │   ├── main.py                                # FastAPI application
 │   └── schemas.py                             # Request and response models
+├── artifacts/
+│   └── business_impact.json                   # Static holdout cost-impact figures
 ├── data/raw/                                  # M5 sales, calendar, and pricing data (not tracked)
 ├── docs/images/                               # Interface screenshots
 ├── examples/
@@ -213,7 +215,8 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 ├── models/                                    # Generated model artifacts
 │   ├── final_xgboost_supply_stress.ubj
 │   ├── model_config.json                      # Operating threshold and metadata
-│   └── model_features.json                    # Feature schema contract
+│   ├── model_features.json                    # Feature schema contract
+│   └── feature_reference_stats.json           # Training feature distribution for drift checks
 ├── notebooks/
 │   └── supply_stress_prediction_case_study.ipynb
 ├── paper_draft/project_notes.md               # Working notes and design decisions
@@ -226,7 +229,8 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 │   └── shap_summary.png
 ├── scripts/
 │   ├── report_metrics.py                      # Full evaluation report against baselines
-│   └── retrain_and_save.py                    # Retrain and write deployment artifacts
+│   ├── report_business_impact.py              # Cost-impact report under stated assumptions
+│   └── retrain_and_save.py                    # Retrain, write deployment artifacts, save drift reference
 ├── src/
 │   ├── load_data.py                           # Raw file loading
 │   ├── preprocess.py                          # Analytical table and stress target
@@ -234,10 +238,14 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 │   ├── train.py                               # Time-based split and model fitting
 │   ├── evaluate.py                            # Metrics and figures
 │   ├── predict.py                             # Batch scoring from saved artifacts
-│   └── pipeline.py                            # End-to-end training orchestration
+│   ├── pipeline.py                            # End-to-end training orchestration
+│   ├── monitoring.py                          # KS/PSI input drift detection
+│   └── business_impact.py                     # Cost-based threshold evaluation
 ├── tests/
 │   ├── test_api.py                            # API contract tests
-│   └── test_leakage.py                        # Temporal validity regression tests
+│   ├── test_leakage.py                        # Temporal validity regression tests
+│   ├── test_business_impact.py                # Cost-calculation correctness tests
+│   └── test_drift.py                          # Drift-detection behavior tests
 ├── Dockerfile                                 # API image
 ├── Dockerfile.frontend                        # Streamlit image
 ├── compose.yaml                               # Local API and frontend stack
@@ -245,7 +253,7 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 ├── requirements.txt                           # Core modeling dependencies
 ├── requirements-api.txt                       # API runtime dependencies
 ├── requirements-frontend.txt                  # Streamlit dependencies
-├── requirements-dev.txt                       # Test and lint dependencies
+├── requirements-dev.txt                       # Test, lint, and optional MLflow dependencies
 ├── LICENSE
 └── README.md
 ```
@@ -384,13 +392,95 @@ Example output:
 - Operating thresholds were selected on the holdout. In production they
   should be chosen on a separate validation period to avoid optimistic bias.
 
+## Monitoring & Business Impact
+
+Three additions extend the project from "model that scores well on a
+holdout" toward the operational questions a deployed model actually
+raises: is training still tracked reproducibly, has the input data
+drifted from what the model learned on, and what does the chosen
+threshold cost in dollars rather than in precision/recall.
+
+### Experiment tracking
+
+`scripts/retrain_and_save.py --mlflow` logs each run's parameters
+(`max_items`, threshold, split day, row counts) and metrics (average
+precision, precision/recall at the saved threshold) to a local MLflow
+experiment. It's optional and best-effort: a missing `mlflow` package
+or an unreachable tracking server logs a warning and does not fail
+the retrain.
+
+### Input drift monitoring
+
+`POST /check-drift` compares the feature distribution of a recent
+scoring batch against a reference captured from the training set
+(`models/feature_reference_stats.json`, regenerated on every retrain).
+A feature is flagged only when both a KS test and Population Stability
+Index agree — PSI alone is unreliable on small batches, and KS alone
+over-triggers on large ones.
+
+**What this does not do:** tell you whether predictions are still
+accurate. That requires real outcomes, which aren't available at
+scoring time. Drift in an input feature is a prompt to re-validate
+against ground truth when it arrives, not a verdict on the model.
+
+### Business impact
+
+`scripts/report_business_impact.py` translates the holdout confusion
+matrix into dollar terms under cost assumptions supplied on the
+command line — there is no built-in default, because this project has
+no verified cost data.
+
+Using a bottom-up estimate grounded in this dataset's actual scale
+(average sell price $4.41, ~0.91 units/day per item-store series, so
+individual stress events carry single-digit-to-low-double-digit dollar
+stakes rather than enterprise-shipment costs) — **$20 per missed
+event, $12 per false alarm, $10 per mitigated true positive**:
+
+| | Count |
+|---|---:|
+| True positives | 4,657 |
+| False positives | 8,082 |
+| False negatives | 29,143 |
+
+| | Cost |
+|---|---:|
+| Do-nothing baseline (every event missed) | $676,000 |
+| Model at the shipped threshold (0.80) | $726,414 |
+| Net difference | **-$50,414** |
+
+**At this cost ratio and item price scale, the model costs more than
+doing nothing at its shipped threshold.** The shipped threshold (0.80)
+was selected to balance precision and recall, not dollar ROI, and the
+two do not automatically agree: 8,082 false positives, each carrying a
+small but nonzero review cost, outweigh the missed-event cost this
+particular ratio assigns. Running `--sweep` finds the ROI-optimal
+threshold is much higher (0.95), and even there the best achievable
+result is a near-breakeven +$26 — obtained by flagging only 5 of
+33,800 stress events. Conservative and moderate cost assumptions did
+not find a threshold that beats doing nothing at all; only a more
+aggressive cost ratio (FN=$40, FP=$15, TP=$20) found a modestly
+positive optimum (+$1,785 at threshold 0.90, catching 387 events).
+
+This is a more useful finding than a manufactured savings number: it
+shows that at this dataset's per-item price scale, the alerting
+system's business case is fragile-to-negative unless intervention
+cost is much lower than a human-review estimate, or the unit of
+action is aggregated above single SKU-store-days (e.g., store-level
+or category-level decisions). Precision/recall and dollar ROI are
+different optimization targets, and conflating them was the central
+flaw in an earlier, unreviewed version of this project's business
+framing.
+
+`GET /business-impact` serves the evaluated scenario as a static
+artifact from the last time the script was run — it is holdout
+arithmetic under stated assumptions, not a live production metric.
+
 ## Future Work
 
 - Replace the proxy target with verified inventory or stockout outcomes.
 - Integrate inventory position, supplier lead times, and replenishment schedules.
 - Deploy to Azure using managed container services.
-- Add MLflow experiment tracking and model registry.
-- Implement model drift monitoring and automated retraining.
+- Add a model registry and an automated retraining trigger on detected drift.
 - Introduce authentication and role-based access control.
 - Support batch inference and scheduled scoring workflows.
 
@@ -432,6 +522,8 @@ The final model is exposed through a production-style FastAPI service and packag
 | `/model-info` | GET | Model type, thresholds, and feature schema |
 | `/predict` | POST | Score JSON historical observations |
 | `/predict-file` | POST | Upload and score a CSV file |
+| `/check-drift` | POST | Compare a recent batch to the training feature distribution |
+| `/business-impact` | GET | Serve holdout cost-impact figures from the last offline evaluation |
 | `/docs` | GET | Interactive Swagger documentation |
 
 ### Build and run with Docker Compose

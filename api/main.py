@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -12,7 +13,11 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from api.schemas import (
+    BusinessImpactResponse,
+    DriftCheckRequest,
+    DriftCheckResponse,
     ErrorResponse,
+    FeatureDriftRecord,
     HealthResponse,
     ModelInfoResponse,
     PredictionRecord,
@@ -20,12 +25,14 @@ from api.schemas import (
     PredictionResponse,
 )
 from src.features import prepare_model_input
+from src.monitoring import compute_drift_report, load_feature_reference
 from src.predict import load_model_artifacts
 
 SERVICE_NAME = "Supply Chain Stress Prediction API"
 SERVICE_VERSION = "1.1.0"
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "models"))
 MAX_INPUT_ROWS = int(os.getenv("MAX_INPUT_ROWS", "100000"))
+BUSINESS_IMPACT_PATH = Path(os.getenv("BUSINESS_IMPACT_PATH", "artifacts/business_impact.json"))
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -57,6 +64,17 @@ async def lifespan(app: FastAPI):
             len(features),
             MODELS_DIR,
         )
+
+    reference_path = MODELS_DIR / "feature_reference_stats.json"
+    if reference_path.exists():
+        try:
+            app.state.drift_reference = load_feature_reference(reference_path)
+            logger.info("Loaded drift reference distribution from %s", reference_path)
+        except Exception:
+            logger.exception("Found %s but failed to parse it", reference_path)
+            app.state.drift_reference = None
+    else:
+        app.state.drift_reference = None
 
     yield
 
@@ -347,4 +365,90 @@ async def predict_file_csv(
             "X-Scored-Rows": str(len(output)),
         },
     )
+
+
+@app.post(
+    "/check-drift",
+    response_model=DriftCheckResponse,
+    tags=["Monitoring"],
+    responses={422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+)
+def check_drift(request: DriftCheckRequest) -> DriftCheckResponse:
+    """
+    Compare the feature distribution of a recent batch to the training reference.
+
+    This checks input drift only - whether incoming data still looks like
+    what the model was trained on. It cannot tell you whether predictions
+    are still accurate, since that requires labels this endpoint doesn't
+    have. Treat a drifted feature as a prompt to re-validate against real
+    outcomes, not as a verdict on the model itself.
+    """
+
+    reference = getattr(app.state, "drift_reference", None)
+    if reference is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No drift reference is loaded. Run scripts/retrain_and_save.py "
+                "to generate models/feature_reference_stats.json."
+            ),
+        )
+
+    _, features, _ = _require_model()
+    frame = pd.DataFrame(
+        [observation.model_dump() for observation in request.observations]
+    )
+
+    try:
+        _, X_ready, _ = prepare_model_input(frame, expected_features=features)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if X_ready.empty:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No rows had enough history to build complete features; "
+                "drift cannot be evaluated on an empty batch."
+            ),
+        )
+
+    report = compute_drift_report(reference, X_ready)
+    records = [FeatureDriftRecord(**vars(result)) for result in report]
+
+    return DriftCheckResponse(
+        n_rows_evaluated=len(X_ready),
+        any_feature_drifted=any(r.drifted for r in records),
+        features=records,
+    )
+
+
+@app.get(
+    "/business-impact",
+    response_model=BusinessImpactResponse,
+    tags=["Monitoring"],
+    responses={404: {"model": ErrorResponse}},
+)
+def business_impact() -> BusinessImpactResponse:
+    """
+    Serve the static cost-impact figures from the last offline evaluation.
+
+    These numbers come from scripts/report_business_impact.py, run against
+    the holdout set under explicitly stated cost assumptions - they are
+    not computed live from production traffic, since real outcomes aren't
+    known at prediction time.
+    """
+
+    if not BUSINESS_IMPACT_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"{BUSINESS_IMPACT_PATH} not found. Run "
+                "scripts/report_business_impact.py with your own cost "
+                "assumptions to generate it."
+            ),
+        )
+
+    payload = json.loads(BUSINESS_IMPACT_PATH.read_text(encoding="utf-8"))
+    return BusinessImpactResponse(**payload)
 

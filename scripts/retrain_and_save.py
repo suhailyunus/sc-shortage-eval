@@ -26,7 +26,46 @@ from sklearn.metrics import average_precision_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.monitoring import build_feature_reference, save_feature_reference  # noqa: E402
 from src.pipeline import run_training_pipeline  # noqa: E402
+
+
+def _log_to_mlflow(args, result, precision: float, recall: float, average_precision: float) -> None:
+    """Log this run's params and metrics to MLflow, if it's installed.
+
+    This is intentionally optional and best-effort: MLflow is a reporting
+    aid, not a training dependency, so a missing package or an
+    unreachable tracking server must not fail the actual retraining run.
+    """
+
+    try:
+        import mlflow
+    except ImportError:
+        print("\n--mlflow was passed but the mlflow package is not installed; skipping.")
+        return
+
+    try:
+        mlflow.set_experiment("supply-chain-stress-prediction")
+        with mlflow.start_run():
+            mlflow.log_params(
+                {
+                    "max_items": args.max_items,
+                    "threshold": args.threshold,
+                    "n_train_rows": len(result.X_train),
+                    "n_test_rows": len(result.X_test),
+                    "split_day": result.split_day,
+                    "model_type": type(result.model).__name__,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "average_precision": average_precision,
+                    "precision_at_threshold": precision,
+                    "recall_at_threshold": recall,
+                }
+            )
+    except Exception as exc:  # pragma: no cover - depends on external tracking server
+        print(f"\nMLflow logging failed ({exc}); the saved model artifacts are unaffected.")
 
 
 def main() -> None:
@@ -39,6 +78,11 @@ def main() -> None:
         "--no-backup",
         action="store_true",
         help="Skip backing up the existing models directory.",
+    )
+    parser.add_argument(
+        "--mlflow",
+        action="store_true",
+        help="Log params and metrics for this run to MLflow (requires the mlflow package).",
     )
     args = parser.parse_args()
 
@@ -101,6 +145,15 @@ def main() -> None:
         )
 
     print("\nSaved threshold matches the requested value.")
+
+    reference_path = models_dir / "feature_reference_stats.json"
+    references = build_feature_reference(result.X_train, list(result.X_train.columns))
+    save_feature_reference(references, reference_path)
+    print(f"\nSaved drift-monitoring reference distribution to {reference_path}")
+
+    if args.mlflow:
+        _log_to_mlflow(args, result, precision, recall, average_precision_score(y_test, scores))
+
     print("\nNext: restart the API locally and confirm it loads the new model.")
 
 

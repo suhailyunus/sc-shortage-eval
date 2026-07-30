@@ -3,5 +3,5 @@
   "positive_class": 1,
   "positive_class_label": "Supply Stress",
   "default_threshold": 0.8,
-  "alternative_threshold": 0.70
+  "alternative_threshold": null
 }

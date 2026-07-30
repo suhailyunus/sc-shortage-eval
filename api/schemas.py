@@ -83,3 +83,54 @@ class ModelInfoResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str | list[dict[str, Any]]
+
+
+class DriftCheckRequest(BaseModel):
+    """Recent historical rows to compare against the training reference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    observations: list[HistoricalObservation] = Field(min_length=1)
+
+
+class FeatureDriftRecord(BaseModel):
+    feature: str
+    ks_statistic: float
+    ks_pvalue: float
+    psi: float
+    drifted: bool
+    reason: str
+
+
+class DriftCheckResponse(BaseModel):
+    n_rows_evaluated: int
+    any_feature_drifted: bool
+    features: list[FeatureDriftRecord]
+    note: str = (
+        "Statistical drift in an input feature does not by itself mean "
+        "predictions are wrong - it means the incoming data no longer "
+        "resembles what the model was trained on, and performance should "
+        "be re-validated against real outcomes when they're available."
+    )
+
+
+class BusinessImpactResponse(BaseModel):
+    """Static holdout-evaluation figures, not a live production metric.
+
+    Computed offline by scripts/report_business_impact.py under cost
+    assumptions supplied at report time. Served here for convenience;
+    values are only as current as the last time that script was run.
+    """
+
+    cost_assumptions: dict[str, float]
+    evaluated_on: str
+    n_holdout_observations: int
+    threshold: float
+    true_positives: int
+    false_positives: int
+    true_negatives: int
+    false_negatives: int
+    total_cost: float
+    cost_per_observation: float
+    do_nothing_cost: float
+    net_savings_vs_do_nothing: float

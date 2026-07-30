@@ -1,0 +1,27 @@
+{
+  "cost_assumptions": {
+    "cost_false_negative": 20.0,
+    "cost_false_positive": 12.0,
+    "cost_true_positive_mitigation": 10.0
+  },
+  "evaluated_on": "holdout set (see README for split definition)",
+  "n_holdout_observations": 381892,
+  "threshold": 0.8,
+  "true_positives": 4053,
+  "false_positives": 7368,
+  "true_negatives": 340724,
+  "false_negatives": 29747,
+  "total_cost": 723886.0,
+  "cost_per_observation": 1.895525436510846,
+  "do_nothing_cost": 676000.0,
+  "net_savings_vs_do_nothing": -47886.0,
+  "threshold_sweep": {
+    "shipped_threshold": 0.8,
+    "shipped_net_savings": -47886.0,
+    "best_threshold": 0.95,
+    "best_net_savings": -8.0,
+    "best_true_positives": 4,
+    "best_false_positives": 4,
+    "best_false_negatives": 33796
+  }
+}
