@@ -10,9 +10,9 @@ WORKDIR /app
 
 RUN groupadd --system app && useradd --system --gid app --create-home app
 
-COPY requirements-frontend.txt .
+COPY requirements-frontend.lock.txt .
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements-frontend.txt
+    && python -m pip install -r requirements-frontend.lock.txt
 
 COPY --chown=app:app frontend ./frontend
 COPY --chown=app:app examples/sample_input.csv ./examples/sample_input.csv

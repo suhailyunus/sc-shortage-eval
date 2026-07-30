@@ -7,10 +7,10 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 WORKDIR /build
 
-COPY requirements-api.txt .
+COPY requirements-api.lock.txt .
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install -r requirements-api.txt
+    && /opt/venv/bin/pip install -r requirements-api.lock.txt
 
 FROM python:3.12-slim AS runtime
 

@@ -35,6 +35,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      - name: Verify dependency lockfiles are up to date
+        run: |
+          python -m pip install --upgrade pip-tools
+          pip-compile requirements-api.txt --output-file requirements-api.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header
+          pip-compile requirements-frontend.txt --output-file requirements-frontend.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header
+          diff requirements-api.lock.txt requirements-api.lock.txt.check
+          diff requirements-frontend.lock.txt requirements-frontend.lock.txt.check
+
       - name: Compile Python source
         run: python -m compileall -q api src frontend tests
 
