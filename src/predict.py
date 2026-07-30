@@ -12,7 +12,7 @@ from src.features import prepare_model_input
 
 def load_model_artifacts(
     models_dir: str | Path = "models",
-):
+) -> tuple[XGBClassifier, list[str], dict]:
     """Load the trained model, feature schema, and model configuration."""
 
     directory = Path(models_dir)
