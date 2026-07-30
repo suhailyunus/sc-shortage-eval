@@ -37,7 +37,11 @@ jobs:
 
       - name: Verify dependency lockfiles are up to date
         run: |
-          python -m pip install --upgrade pip-tools
+          # pip-tools 7.6.0 (latest) is incompatible with pip>=26 (it imports
+          # a private pip internal that was removed). Pin pip down just for
+          # this step so pip-compile actually runs.
+          python -m pip install --quiet "pip<26"
+          python -m pip install --quiet --upgrade pip-tools
           pip-compile requirements-api.txt --output-file requirements-api.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header
           pip-compile requirements-frontend.txt --output-file requirements-frontend.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header
           diff requirements-api.lock.txt requirements-api.lock.txt.check
