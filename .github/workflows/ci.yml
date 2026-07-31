@@ -36,14 +36,24 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Verify dependency lockfiles are up to date
+        env:
+          # GitHub's actions/setup-python `cache: pip` step restores a
+          # cached ~/.cache/pip between runs, keyed off requirements*.txt
+          # (which don't change often). That stale cache can make
+          # pip-compile resolve against old index metadata instead of
+          # PyPI's current state, causing this check to disagree with a
+          # truly fresh resolution. Force both pip's HTTP cache and
+          # pip-tools' own resolution cache to be bypassed so this check
+          # always reflects reality, not a cached snapshot of it.
+          PIP_NO_CACHE_DIR: "1"
         run: |
           # pip-tools 7.6.0 (latest) is incompatible with pip>=26 (it imports
           # a private pip internal that was removed). Pin pip down just for
           # this step so pip-compile actually runs.
-          python -m pip install --quiet "pip<26"
-          python -m pip install --quiet --upgrade pip-tools
-          pip-compile requirements-api.txt --output-file requirements-api.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header
-          pip-compile requirements-frontend.txt --output-file requirements-frontend.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header
+          python -m pip install --quiet --no-cache-dir "pip<26"
+          python -m pip install --quiet --no-cache-dir --upgrade pip-tools
+          pip-compile requirements-api.txt --output-file requirements-api.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header --rebuild
+          pip-compile requirements-frontend.txt --output-file requirements-frontend.lock.txt.check --resolver=backtracking --quiet --strip-extras --no-header --rebuild
           diff requirements-api.lock.txt requirements-api.lock.txt.check
           diff requirements-frontend.lock.txt requirements-frontend.lock.txt.check
 
