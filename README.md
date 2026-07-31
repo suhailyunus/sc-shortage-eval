@@ -44,6 +44,8 @@
 
 > A production-oriented machine learning application demonstrating how historical retail demand signals can be transformed into an operational early-warning system through automated feature engineering, REST APIs, containerized deployment, and an interactive web interface.
 
+📄 **[Read the full case study →](paper_draft/case_study.md)** — the experimental journey, a leakage bug found and fixed with regression tests, and the engineering work that came after the model.
+
 ---
 
 
