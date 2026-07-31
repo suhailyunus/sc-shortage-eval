@@ -186,6 +186,4 @@ was easy to get and was actively misleading. The real demonstration is
 narrower and more defensible: **a proxy target stated honestly, a
 validation methodology that was checked hard enough to find its own bugs,
 a fix proven with tests rather than asserted, and infrastructure hardened
-enough that those guarantees hold up outside a notebook.** That's the
-version of this project that's worth defending, line by line, in an
-interview.
+enough that those guarantees hold up outside a notebook.**
