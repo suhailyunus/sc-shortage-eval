@@ -163,6 +163,22 @@ pin `pip<26` for that one CI step — was found by reproducing the exact CI
 failure locally, confirming the root cause, and verifying the fix
 end-to-end before pushing, rather than guessing and re-pushing blind.
 
+**A second failure that looked identical but wasn't.** The same check
+later failed again, on the same line of the same file, and the first
+instinct was that it was a repeat of a known, already-fixed issue — a
+transient PyPI timing blip, since re-running the job should self-correct a
+true one-off. It didn't self-correct. That was the signal the first
+diagnosis was wrong, and it led to the actual mechanism: `pip-compile`
+deliberately preserves an existing pin if it still satisfies the
+constraints file, rather than always jumping to the newest available
+version. The CI check compiles to a brand-new filename with no prior pin
+to prefer, so it always resolves the true latest — meaning a lockfile
+regenerated "in place" on top of itself can silently stay one patch
+version stale indefinitely, disagreeing with CI on every single run, not
+just once. The fix was to regenerate from a clean slate rather than in
+place, verified by reproducing five consecutive fresh resolutions before
+trusting the result.
+
 ## Honest limitations
 
 This project is explicit about what it doesn't do, both in the README and

@@ -567,7 +567,9 @@ docker compose down
 - The container filesystem is read-only under Compose.
 - Linux capabilities are dropped and privilege escalation is disabled.
 - Model readiness is monitored through an HTTP health check.
-- Runtime dependencies are isolated in `requirements-api.txt`.
+- Runtime dependencies are pinned via a compiled lockfile
+  (`requirements-api.lock.txt`), with a CI check that fails the build if
+  the lockfile ever drifts from its source `requirements-api.txt`.
 - `.dockerignore` excludes notebooks, data, development caches, and other non-runtime files.
 
 ### Run API tests locally
