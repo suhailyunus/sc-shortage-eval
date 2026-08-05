@@ -372,21 +372,47 @@ Example output:
 - Feature schemas and operating thresholds belong with the model artifact.
 - A model can be most useful as a prioritized review queue rather than an
   autonomous decision-maker.
+- Plain string and Int64 columns are the default, and both are expensive
+  at scale: at ~9.5M rows, uncompressed string columns cost ~1.5GB before
+  any join, and Int64 columns holding values that fit in a single byte
+  (weekday, month, SNAP flags) cost 8x more than necessary. Categorical
+  dtype and explicit downcasting turned an OOM-killed pipeline into one
+  that runs in seconds, on the same hardware.
+- One-hot encoding a column that's been partitioned to a single category
+  (e.g. by chunking on `store_id`) silently produces zero dummy columns —
+  no error, no warning. Any chunked-processing pipeline using dummy
+  encoding needs a fixed, known category list, not per-chunk inference.
+- A single random seed is not a result. The same sampling design produced
+  ROI-optimal estimates ranging 2.3x (+$37,850 to +$85,500) across 3
+  seeds at 5,000 series; the qualitative direction was stable, the dollar
+  figure was not, and reporting only one seed's number would have been
+  misleading regardless of which seed got picked.
+- External review found a real confound (store-volume/stress-rate
+  correlation) that had already been named as an open question in this
+  project's own Limitations section but not yet tested. Writing down what
+  you haven't checked is only useful if you eventually go check it.
 
 ## Limitations
 
 - The target is a proxy for supply stress, not a verified inventory or
   stockout outcome. M5 contains no inventory data.
-- **The stress threshold groups by `item_id` alone, pooling across
-  stores.** High-volume stores therefore exceed their item's pooled 90th
-  percentile more often by construction, so the observed store-level
-  feature importance may partly reflect the label definition rather than
-  genuine demand behaviour. Grouping by item and store would make the
-  claim "unusually high for this item at this store"; this has not been
-  evaluated.
-- The workflow samples the first 100 items for computational tractability.
-  Results have not been validated across the full 30,490-series dataset.
-- Recall at the shipped threshold is 0.12. Most stress events are missed.
+- **[Resolved, see Validation at Scale] The stress threshold originally
+  grouped by `item_id` alone, pooling across stores.** An external review
+  (Gemini) flagged that high-volume stores would exceed their item's
+  pooled 90th percentile more often by construction — a volume confound,
+  not genuine demand stress. Verified empirically (store-level stress
+  rate correlated with store sales volume at Pearson r=0.85) and fixed by
+  grouping on `(item_id, store_id)` instead. Recall dropped substantially
+  once the confound was removed; see Validation at Scale for corrected
+  figures.
+- **[Resolved, see Validation at Scale] The original workflow sampled the
+  first 100 items for computational tractability, unvalidated across the
+  full 30,490-series catalog.** Since re-validated on a stratified
+  5,000-series sample (3 random seeds) and on the complete 30,490-series
+  catalog.
+- Recall at the shipped threshold is now 0.03 on the full catalog under
+  the corrected target definition (was 0.12 under the flawed one — a
+  more honest number, not a regression). Most stress events are missed.
 - Predicted scores are not calibrated probabilities.
 - Inventory position, replenishment schedules, supplier lead times,
   weather, and logistics disruptions are absent from the feature set and
@@ -476,6 +502,90 @@ framing.
 `GET /business-impact` serves the evaluated scenario as a static
 artifact from the last time the script was run — it is holdout
 arithmetic under stated assumptions, not a live production metric.
+
+> **Update:** the figures above were computed on a 100-item sample
+> under a target definition later found to have a volume confound (see
+> [Validation at Scale](#validation-at-scale)). The qualitative
+> conclusion — the shipped threshold loses money, a smaller real
+> positive-ROI threshold exists near 0.90 — holds up under correction
+> and at full catalog scale, but the exact dollar figures above are
+> superseded. Treat this section as the original analysis for
+> historical reference, not the current best estimate.
+
+## Validation at Scale
+
+Three questions were still open after the initial 100-item build: does
+this generalize past 0.3% of the catalog, does it hold at full scale,
+and is the target definition itself sound. All three were tested
+directly rather than assumed.
+
+### Stratified 5,000-series sample
+
+Sampling 500 items (of 3,049) stratified by department and demand
+class — smooth / erratic / intermittent / lumpy, via the Syntetos-Boylan
+ADI/CV² classification — yields exactly 500 × 10 stores = 5,000 series
+with zero store-representation bias, since every item spans all 10
+stores. Intermittent and lumpy items (the hardest, most business-relevant
+segment) were oversampled 1.5x relative to their natural catalog share
+(44% → 53% intermittent in the sample).
+
+Precision improved at every operating threshold versus the original
+100-item run (e.g. 0.494 vs. ~0.366 at the shipped 0.80 threshold) — a
+genuine effect of more, more diverse training data, not an artifact.
+Re-running across 3 random seeds confirmed the *direction* is stable but
+the *magnitude* is not: ROI-optimal net ranged from +$37,850 to +$85,500
+depending purely on which 500 items were drawn. Report ranges, not point
+estimates, at this sample size.
+
+### Full 30,490-series catalog
+
+The complete catalog (58.3M raw rows) doesn't fit this project's
+reference hardware budget in one pass. Processed store-by-store
+(10 chunks of ~5.8M rows each), with per-item stress thresholds
+precomputed once from pooled wide-format data to avoid recomputation,
+and each store's engineered features checkpointed to disk before moving
+to the next — resilient to interruption, and each chunk individually
+validated against the same leakage tests as the full pipeline. Trained
+on a 20% row-subsample of the training period (compute constraint);
+evaluated on the **complete, non-subsampled** 11.6M-row holdout, since
+the evaluation is the number that matters and shouldn't be approximated.
+
+One real bug surfaced and was fixed before trusting these numbers:
+chunking by store meant `store_id`/`state_id` had only one category per
+chunk, so one-hot encoding silently produced zero location columns —
+no error, no warning. Fixed by encoding against the full known category
+list (all 10 stores, all 3 states) rather than what's present per chunk,
+so every chunk produces the same, stackable columns.
+
+### The target definition itself had a confound
+
+An external review (Gemini) flagged that grouping the stress threshold
+by `item_id` alone — pooling across all 10 stores per item — means
+high-volume stores cross their item's pooled 90th percentile more often
+simply by selling more, independent of any genuine anomaly. Verified
+directly: store-level stress-event rate ranged 7.7%-19.9% under the
+original grouping, correlated with store-level average sales volume at
+**Pearson r=0.85**. Fixing this — grouping by `(item_id, store_id)`
+instead of `item_id` alone — dropped that correlation to r=0.03 and
+recall fell substantially at every threshold, since a real portion of
+the original recall was the model learning "which store-item combos
+are inherently high-volume," not genuine demand stress.
+
+### Consolidated results across every correction
+
+| Scale | Target definition | @0.80 net | ROI-optimal |
+|---|---|---:|---|
+| 1,000-series (original) | pooled by item (flawed) | -$50,414 | 0.95, +$26 |
+| 5,000-series (3-seed avg) | pooled by item (flawed) | -$53,158 | ~0.88, +$57,877 |
+| 5,000-series | **corrected (item+store)** | -$9,078 | 0.89, +$27,584 |
+| 30,490-series (full) | **corrected (item+store)** | **-$209,794** | **0.90, +$47,148** |
+
+The qualitative findings hold under every correction applied: the
+shipped threshold consistently costs more than doing nothing, and a
+real (smaller, more honestly-earned) positive-ROI threshold exists
+around 0.89-0.90. What changed was magnitude and cause — a meaningful
+share of the original recall was a labeling artifact, not detection
+skill — which is a more useful thing to know than a bigger number.
 
 ## Future Work
 
