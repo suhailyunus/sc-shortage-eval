@@ -220,6 +220,7 @@ def build_analytical_table(
     max_items: int | None = 100,
     stress_quantile: float = 0.90,
     train_fraction: float = 0.80,
+    stress_grouping: tuple[str, ...] = ("item_id", "store_id"),
 ) -> tuple[pd.DataFrame, int]:
     """
     Create the merged long-format analytical table.
@@ -228,6 +229,18 @@ def build_analytical_table(
     The stress threshold is estimated from that period only, and callers
     must reuse the same boundary when splitting so that no label or
     feature is informed by the holdout.
+
+    stress_grouping defaults to (item_id, store_id), NOT item_id alone.
+    Grouping by item_id alone pools sales across all 10 stores per item,
+    which lets high-volume stores exceed the pooled 90th percentile more
+    often simply by selling more -- a volume artifact, not genuine demand
+    stress. Verified: store-level stress rate correlated with store sales
+    volume at Pearson r=0.85 under the item-only grouping, r=0.03 under
+    this corrected one. See paper_draft/case_study.md, "Scaling past 100
+    items -- and a critique that held up," for the full writeup. Pass
+    grouping=("item_id",) explicitly only to reproduce the original,
+    confounded behaviour for historical comparison -- never for a result
+    that will be reported or deployed.
     """
 
     selected_sales = select_items(sales, max_items=max_items)
@@ -241,7 +254,7 @@ def build_analytical_table(
     targeted = add_stress_target(
         long_sales,
         quantile=stress_quantile,
-        grouping=("item_id",),
+        grouping=stress_grouping,
         threshold_cutoff_day=split_day,
     )
     with_calendar = merge_calendar(targeted, calendar)

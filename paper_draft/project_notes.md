@@ -1,5 +1,16 @@
 # Dataset Notes
 
+> **Note (added later):** these are raw exploratory notes from the
+> project's first pass — written before the chronological-split leakage
+> bugs were found and fixed, using a default 0.50 threshold that was
+> later replaced. Left as-is intentionally, as a genuine record of the
+> early process. See `paper_draft/case_study.md` for what was actually
+> found on rigorous re-validation, including a specific correction to
+> the geographic findings below — the "Geographic Supply Stress
+> Exploration" section reports a store-volume confound as if it were a
+> genuine effect, which is exactly the flaw an external reviewer later
+> caught and this project fixed.
+
 ## Dataset
 
 M5 Forecasting Accuracy Dataset
@@ -451,6 +462,19 @@ schedules, inventory policies, or distribution network characteristics.
 Although this exploratory analysis does not establish causality, it
 demonstrates that location-based features are likely to improve
 predictive performance.
+
+> **Correction (added later):** this interpretation turned out to be
+> wrong in an important way. The store-level rate spread seen here
+> (3%–10%+) was later shown to correlate with store sales *volume* at
+> Pearson r=0.85 — high-volume stores were crossing the stress threshold
+> more often simply because the threshold was computed by pooling sales
+> across all 10 stores per item, not because of any genuine geographic
+> effect. Grouping the threshold by `(item_id, store_id)` instead of
+> `item_id` alone dropped that correlation to r=0.03. Location features
+> may still carry some real signal, but the effect size reported here is
+> substantially a labeling artifact, not the geographic finding it's
+> described as. See `paper_draft/case_study.md`, "Scaling past 100 items
+> — and a critique that held up."
 
 ### Modeling Decision
 
@@ -989,11 +1013,26 @@ A reusable prediction pipeline now:
 
 # Future Improvements
 
--   Replace the proxy target with verified stockout labels.
--   Add inventory and supplier lead-time features.
--   Calibrate probabilities.
--   Monitor model drift.
--   Add scheduled batch scoring.
--   Compare with LightGBM and CatBoost.
--   Build a Streamlit dashboard.
--   Deploy as a REST API.
+> **Status update (added later):** several of these have since been
+> done. Left the original list intact below for the historical record,
+> with status noted inline.
+
+-   Replace the proxy target with verified stockout labels. *(Still
+    open — no inventory data exists in M5.)*
+-   Add inventory and supplier lead-time features. *(Still open.)*
+-   Calibrate probabilities. *(Still open — scores remain uncalibrated;
+    see case study limitations.)*
+-   Monitor model drift. *(Done — `src/monitoring.py`, KS test/PSI,
+    `POST /check-drift` endpoint.)*
+-   Add scheduled batch scoring. *(Still open.)*
+-   Compare with LightGBM and CatBoost. *(Still open.)*
+-   Build a Streamlit dashboard. *(Done — see `frontend/`.)*
+-   Deploy as a REST API. *(Done — FastAPI, containerized, see
+    `api/`.)*
+
+Also since completed but not anticipated in this list: two chronological
+data-leakage bugs found and fixed with regression tests, dependency
+lockfiles pinned and CI-verified, a store-volume confound in the stress
+target found (by external review) and fixed, and validation extended
+from 100 items to the complete 30,490-series catalog. See
+`paper_draft/case_study.md` for the full story.
