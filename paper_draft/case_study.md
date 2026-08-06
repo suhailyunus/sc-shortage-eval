@@ -179,6 +179,107 @@ just once. The fix was to regenerate from a clean slate rather than in
 place, verified by reproducing five consecutive fresh resolutions before
 trusting the result.
 
+## Scaling past 100 items — and a critique that held up
+
+Everything above was validated on 100 items — about 3.3% of the M5
+catalog's 30,490 item-store series, not the 0.3% an early draft of this
+project claimed. That correction itself is worth naming: "100 items"
+sounds like "100 of 30,490," but every item spans all 10 stores, so 100
+items is actually 1,000 series. Small arithmetic error, but the kind
+that quietly understates a limitation instead of stating it — worth
+catching and fixing before a reader catches it first.
+
+The real question it raised wasn't "was the arithmetic right," it was
+"does any of this hold up past a 100-item sample." That took three
+separate pushes, not one.
+
+**Push one: a stratified 5,000-series sample.** Random sampling would
+have mostly reproduced the catalog's natural mix — 44% of items are
+intermittent demand, the hardest and most business-relevant segment, and
+a random draw would represent them at roughly that rate. Instead, 500
+items were sampled stratified by department and demand class (the
+Syntetos-Boylan ADI/CV² classification — smooth, erratic, intermittent,
+lumpy), with intermittent and lumpy oversampled 1.5x relative to their
+natural share. Every item spans all 10 stores, so 500 items is exactly
+5,000 series with zero store-representation bias, for free.
+
+Precision improved at every threshold over the 100-item run — a real
+effect of more, more diverse data, not an artifact. But running the same
+sampling design across 3 random seeds showed the *dollar* result wasn't
+stable even though the *direction* was: ROI-optimal net ranged from
++$37,850 to +$85,500 depending purely on which 500 items got drawn. One
+seed's number would have been a reasonable-looking, wrong headline. Three
+seeds turned an implied point estimate into an honest range.
+
+**Push two: pandas couldn't hold this much data on the reference
+hardware (a 3.9GB-RAM, 1-core container), so the pipeline was ported to
+Polars.** The port surfaced its own lesson before producing any result:
+the first three attempts died to out-of-memory kills, not because Polars
+is slow but because the defaults are expensive at this row count. Plain
+string columns (`item_id`, `weekday`, event names) cost ~1.5GB
+uncompressed at 9.5M rows before any join; `Categorical` dictionary
+encoding fixed that. Plain Int64 columns holding values that fit in a
+single byte (`wday`, `month`, SNAP flags) cost 8x more than necessary;
+explicit downcasting fixed that too. Same lesson already learned once
+with pandas dtypes, now paid for again in a different library — worth
+remembering it doesn't transfer automatically.
+
+**Push three: the complete 30,490-series catalog**, which doesn't fit
+this hardware in one pass regardless of dtype tightening. Processed
+store-by-store — 10 chunks of ~5.8M rows each, each one checkpointed to
+disk before starting the next, so a mid-run failure loses one chunk, not
+the whole job. Trained on a 20% row-subsample of the training period (a
+real compute constraint, stated as one); evaluated on the complete,
+non-subsampled 11.6M-row holdout, because the evaluation is the number
+that actually gets trusted and shouldn't be the one that's approximated.
+
+That chunking approach hid a bug that a metrics dashboard would never
+have surfaced: `store_id`/`state_id` one-hot encoding, run one store at a
+time, saw only a single category per chunk — and one-hot-encoding a
+single-category column with `drop_first=True` produces *zero* columns.
+No error. No warning. Just a joint model silently trained without
+location features, on a result that still looked entirely plausible.
+Caught by checking that every chunk produced the same column set before
+trusting anything downstream of it — not by anything failing loudly.
+
+**Then an external reviewer (Gemini) read the README's own stated
+limitations and found the one that had been named but never checked.**
+The stress threshold grouped by `item_id` alone, pooling sales across all
+10 stores per item. A high-volume store would cross that pooled 90th
+percentile more often simply by selling more — a volume artifact wearing
+the costume of a demand signal. The README had already written this down
+as an open question ("this has not been evaluated") months earlier and
+then moved on to other work without closing it.
+
+Verified before touching any code: store-level stress-event rate ranged
+7.7%–19.9% across the 10 stores, correlated with store-level average
+sales volume at **Pearson r = 0.85**. That's not a subtle effect. Fixed
+by grouping the threshold on `(item_id, store_id)` instead of `item_id`
+alone — after the fix, the same correlation measured **r = 0.03**, and
+per-store rates tightened to 6.7%–8.1%.
+
+Recall dropped substantially at every threshold once the fix landed.
+That's the correct outcome, not a regression: a real share of the
+original recall was the model learning "which store-item combinations
+sell a lot," not genuine demand stress, and losing that inflation is
+what an honest number is supposed to do.
+
+| Scale | Target definition | @0.80 net | ROI-optimal |
+|---|---|---:|---|
+| 1,000-series (original) | pooled by item (flawed) | -$50,414 | 0.95, +$26 |
+| 5,000-series (3-seed avg) | pooled by item (flawed) | -$53,158 | ~0.88, +$57,877 |
+| 5,000-series | corrected (item+store) | -$9,078 | 0.89, +$27,584 |
+| 30,490-series (full) | corrected (item+store) | **-$209,794** | **0.90, +$47,148** |
+
+The qualitative findings survived every correction: the shipped 0.80
+threshold consistently loses money, and a real, smaller, more honestly
+earned positive-ROI threshold exists near 0.90. What changed was
+magnitude and cause, not conclusion — and a labeling artifact getting
+caught by outside review, verified rather than just accepted, and fixed
+with a regression test guarding against it coming back, is a more useful
+thing to have happened to this project than a clean first draft would
+have been.
+
 ## Honest limitations
 
 This project is explicit about what it doesn't do, both in the README and
@@ -186,14 +287,22 @@ here:
 
 - The target is a proxy for stress, not a verified stockout label. Every
   result should be read through that lens.
-- Precision at any usable alert volume is low (0.27–0.52 depending on
-  threshold) — this is a **prioritization aid** for a review queue, not a
-  detection system with confidence.
+- Precision at any usable alert volume is modest — this is a
+  **prioritization aid** for a review queue, not a detection system with
+  confidence.
 - Model scores are not calibrated probabilities; `scale_pos_weight` shifts
   them upward by construction.
-- The default threshold (0.80) trades recall down to 0.12 — meaning most
-  stress events are still missed. That number is stated in the README
-  without softening.
+- The default threshold (0.80) trades recall down to **0.03** on the full
+  30,490-series catalog under the corrected, store-volume-confound-free
+  target definition (was 0.12 under the original, flawed one — a more
+  honest number, not a regression; see "Scaling past 100 items" above).
+  Most stress events are still missed, and that number is stated without
+  softening.
+- The full-catalog result was trained on a 20% row-subsample of the
+  training period, for compute reasons on the reference hardware — stated
+  plainly rather than implied to be the complete training set. The
+  holdout evaluation, which is the number that matters most, was not
+  subsampled.
 
 ## What this project is actually demonstrating
 
@@ -201,5 +310,7 @@ Not "I can train a gradient-boosted model to 92% accuracy" — that number
 was easy to get and was actively misleading. The real demonstration is
 narrower and more defensible: **a proxy target stated honestly, a
 validation methodology that was checked hard enough to find its own bugs,
-a fix proven with tests rather than asserted, and infrastructure hardened
-enough that those guarantees hold up outside a notebook.**
+a fix proven with tests rather than asserted, infrastructure hardened
+enough that those guarantees hold up outside a notebook, and a real flaw
+caught by outside review that got verified before being trusted and
+fixed with a regression test instead of a shrug.**
