@@ -3,3 +3,5 @@ pytest>=8.3,<9.0
 httpx>=0.28,<1.0
 ruff>=0.11,<1.0
 mlflow>=3.0,<4.0  # optional: only used by scripts/retrain_and_save.py --mlflow
+polars>=1.0,<2.0  # only used by src/polars_preprocess.py, src/polars_features.py, and scripts/validate_at_scale.py + related validation scripts -- not used by api/ or frontend/
+pyarrow>=17.0,<18.0  # parquet I/O for scripts/build_full_catalog_chunks.py chunk checkpoints
