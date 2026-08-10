@@ -34,3 +34,11 @@ notebooks/archive/
 
 # Timestamped backups written by scripts/retrain_and_save.py
 models_backup_*/
+
+# dbt / Snowflake credentials -- never commit these
+.env
+dbt/profiles.yml
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/package-lock.yml
