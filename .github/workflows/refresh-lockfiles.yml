@@ -1,0 +1,72 @@
+name: Refresh dependency lockfiles
+
+# Runs on its own schedule so lockfile drift gets caught and fixed
+# proactively, instead of surfacing as a failed "Verify dependency
+# lockfiles are up to date" check on some unrelated future push. Opens
+# a PR for review rather than committing straight to main, since a
+# dependency bump (even a patch release) is worth a look before it
+# ships -- see ci.yml's own comment about pip-tools/pip version
+# incompatibilities for an example of why "just take the latest" isn't
+# always risk-free.
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC. Adjust the cron expression if you'd
+    # rather it run on a different day/time -- https://crontab.guru is
+    # useful for checking what a given expression means.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}   # lets you trigger this manually from the Actions tab too
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh-lockfiles:
+    name: Check for lockfile drift, open a PR if found
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Regenerate lockfiles
+        env:
+          # Same reasoning as ci.yml: force a truly fresh resolution,
+          # not a cached one, since the whole point of this job is to
+          # find out what's actually new.
+          PIP_NO_CACHE_DIR: "1"
+        run: |
+          python -m pip install --quiet --no-cache-dir "pip<26"
+          python -m pip install --quiet --no-cache-dir --upgrade pip-tools
+          pip-compile requirements-api.txt --output-file requirements-api.lock.txt --resolver=backtracking --quiet --strip-extras --no-header --rebuild
+          pip-compile requirements-frontend.txt --output-file requirements-frontend.lock.txt --resolver=backtracking --quiet --strip-extras --no-header --rebuild
+
+      - name: Open a pull request if anything changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "Automated: refresh dependency lockfiles"
+          title: "Automated: refresh dependency lockfiles"
+          body: |
+            Weekly scheduled lockfile refresh. Opened automatically because
+            `pip-compile --rebuild` produced a different result than what's
+            currently committed -- meaning an upstream package released a
+            new version since the lockfiles were last regenerated.
+
+            **Before merging:** skim the diff for anything bigger than a
+            patch-version bump (e.g. a major/minor version change on
+            `xgboost`, `fastapi`, or `streamlit`), since those occasionally
+            carry breaking changes worth reading the changelog for first.
+            Patch-level bumps (the common case) are generally safe to merge
+            once CI passes.
+
+            This PR will only appear when there's an actual difference to
+            review -- no diff means no PR gets opened.
+          branch: automated/refresh-lockfiles
+          delete-branch: true
+          labels: dependencies
