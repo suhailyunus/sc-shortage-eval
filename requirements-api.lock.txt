@@ -22,7 +22,7 @@ joblib==1.5.3
     #   scikit-learn
 narwhals==2.24.0
     # via scikit-learn
-numpy==2.5.1
+numpy==2.5.2
     # via
     #   -r requirements-api.txt
     #   pandas
@@ -58,7 +58,7 @@ scipy==1.18.0
     #   xgboost
 six==1.17.0
     # via python-dateutil
-starlette==1.4.1
+starlette==1.6.0
     # via fastapi
 threadpoolctl==3.6.0
     # via scikit-learn
@@ -70,7 +70,7 @@ typing-extensions==4.16.0
     #   pydantic-core
     #   starlette
     #   typing-inspection
-typing-inspection==0.4.2
+typing-inspection==0.4.3
     # via
     #   fastapi
     #   pydantic
