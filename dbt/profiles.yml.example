@@ -1,0 +1,26 @@
+# Template for ~/.dbt/profiles.yml (dbt's global config location, NOT
+# inside this repo -- profiles.yml commonly holds credentials, so dbt
+# keeps it outside any git-tracked project by convention).
+#
+# Copy this content into ~/.dbt/profiles.yml (create the .dbt folder in
+# your home directory if it doesn't exist yet). It reads credentials
+# from the same .env variables you already set up -- run
+# `source .env` (Mac/Linux) or load them another way before running
+# dbt, so these env_var() lookups resolve.
+#
+# This file itself (profiles.yml.example) is safe to commit -- it
+# contains no real credentials, only variable names.
+
+supply_chain_stress:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA') }}"
+      threads: 4

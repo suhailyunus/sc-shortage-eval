@@ -207,6 +207,15 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 ├── artifacts/
 │   └── business_impact.json                   # Static holdout cost-impact figures
 ├── data/raw/                                  # M5 sales, calendar, and pricing data (not tracked)
+├── dbt/                                       # Bronze/silver/gold transformation layer (Snowflake)
+│   ├── README.md                              # Architecture notes and run instructions
+│   ├── dbt_project.yml
+│   ├── profiles.yml.example                   # Connection template (real profiles.yml is gitignored)
+│   ├── packages.yml
+│   └── models/
+│       ├── staging/                           # Bronze: typed views over raw Snowflake tables
+│       ├── intermediate/                      # Silver: joins + corrected stress target
+│       └── marts/                             # Gold: final feature table + data tests
 ├── docs/images/                               # Interface screenshots
 ├── examples/
 │   ├── sample_input.csv                       # Example batch scoring input
@@ -232,7 +241,9 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 ├── scripts/
 │   ├── report_metrics.py                      # Full evaluation report against baselines
 │   ├── report_business_impact.py              # Cost-impact report under stated assumptions
-│   └── retrain_and_save.py                    # Retrain, write deployment artifacts, save drift reference
+│   ├── retrain_and_save.py                    # Retrain, write deployment artifacts, save drift reference
+│   ├── snowflake_setup.sql                    # One-time Snowflake account provisioning (warehouse/db/role/user)
+│   └── load_raw_to_snowflake.py                # Reshape + load M5 CSVs into Snowflake RAW schema
 ├── src/
 │   ├── load_data.py                           # Raw file loading
 │   ├── preprocess.py                          # Analytical table and stress target
@@ -256,6 +267,7 @@ The `supply_stress_prediction_case_study.ipynb` notebook automatically generates
 ├── requirements-api.txt                       # API runtime dependencies
 ├── requirements-frontend.txt                  # Streamlit dependencies
 ├── requirements-dev.txt                       # Test, lint, and optional MLflow dependencies
+├── requirements-dbt.txt                       # dbt-core, dbt-snowflake, snowflake-connector-python
 ├── LICENSE
 └── README.md
 ```
@@ -586,6 +598,55 @@ real (smaller, more honestly-earned) positive-ROI threshold exists
 around 0.89-0.90. What changed was magnitude and cause — a meaningful
 share of the original recall was a labeling artifact, not detection
 skill — which is a more useful thing to know than a bigger number.
+
+## Data Warehouse Layer (dbt + Snowflake)
+
+The pandas/Polars pipeline above is the one that trains and serves the
+model. As a separate, parallel exercise, the same transformation logic
+— same joins, same corrected leakage-safe stress target, same feature
+engineering — was rebuilt as SQL running inside Snowflake, orchestrated
+by dbt. Nothing about the model changed; this translates an
+already-validated pipeline into a warehouse-native one.
+
+**Why bronze/silver/gold, specifically:**
+- **Bronze** (`dbt/models/staging/`): typed, renamed views over raw
+  Snowflake tables. No business logic — just "these types can be
+  trusted."
+- **Silver** (`dbt/models/intermediate/`): the actual transformation.
+  Joins sales with calendar/price context, then computes the
+  stress-event target — grouped by `(item_id, store_id)`, the corrected
+  definition (see "Scaling past 100 items" above), not the flawed
+  `item_id`-only pooling that started this whole investigation.
+- **Gold** (`dbt/models/marts/`): the final, model-ready feature table.
+  Lag/rolling features use `ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING` —
+  the SQL equivalent of the `.shift(1).rolling(7)` pattern from the
+  original leakage-bug fix, so today's sales still can never leak into
+  today's own rolling average. Location is one-hot encoded against a
+  **fixed, known category list**, the same fix applied after the
+  silent-zero-columns bug found during full-catalog chunked processing.
+
+**What's verified, and how:** loaded and transformed against a real
+100-item (1,000-series) sample in a live Snowflake trial account — not
+just written and assumed correct. `dbt run` builds all 6 models
+successfully; `dbt test` runs 11 automated data-quality checks
+(non-null constraints, valid `stress_event` values, and a row-uniqueness
+check on `(item_id, store_id, day_num)` that would catch the exact
+join-fan-out bug class already found once in the Python full-catalog
+work). All 11 pass.
+
+**What's intentionally not done:** this stops at proof-of-concept scale
+(100 items), not the full 30,490-series catalog. The validation question
+— does the corrected target definition and pipeline logic hold up at
+full scale — was already answered rigorously in Python (see "Validation
+at Scale" above); re-running the same, already-proven logic bigger in
+SQL wouldn't answer a new question, just spend more of a trial account's
+compute credits proving the same thing again. There's also no
+orchestration (this runs on-demand, not on a schedule) and no
+incremental materialization — both straightforward additions if this
+became a real production pipeline rather than a portfolio demonstration
+of the pattern.
+
+See `dbt/README.md` for architecture notes and full run instructions.
 
 ## Future Work
 

@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: fct_supply_stress_features
+    description: "Final model-ready feature table. One row per (item_id, store_id, day_num) with all features src/features.py's create_model_features() would produce."
+    columns:
+      - name: id
+        tests:
+          - not_null
+      - name: item_id
+        tests:
+          - not_null
+      - name: store_id
+        tests:
+          - not_null
+      - name: day_num
+        tests:
+          - not_null
+      - name: sales
+        tests:
+          - not_null
+      - name: stress_event
+        description: "1 if sales exceeded this (item_id, store_id)'s train-period 90th percentile, else 0."
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+      - name: sales_lag_1
+        tests:
+          - not_null
+      - name: rolling_mean_7
+        tests:
+          - not_null
+
+    tests:
+      # One row per series per day -- catches any join fan-out from the
+      # price/calendar merges in int_analytical_base before it reaches
+      # the model.
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - item_id
+              - store_id
+              - day_num
+
+  - name: int_stress_target
+    description: "Sales joined with the corrected, leakage-safe stress-event target."
+    columns:
+      - name: stress_threshold
+        tests:
+          - not_null

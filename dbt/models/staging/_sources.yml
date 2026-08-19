@@ -1,0 +1,49 @@
+version: 2
+
+sources:
+  - name: raw
+    description: "Untransformed tables loaded by scripts/load_raw_to_snowflake.py"
+    schema: RAW
+    tables:
+      - name: sales_long
+        description: "M5 sales, already reshaped to long format in Python (see loader script docstring for why this reshape happens outside dbt)."
+        columns:
+          - name: id
+            description: "Full series identifier, e.g. HOBBIES_1_001_CA_1_validation"
+          - name: item_id
+          - name: dept_id
+          - name: cat_id
+          - name: store_id
+          - name: state_id
+          - name: day
+            description: "Raw day label, e.g. d_123"
+          - name: sales
+          - name: day_num
+            description: "Integer day number extracted from 'day', e.g. 123"
+
+      - name: calendar
+        description: "M5 calendar: dates, events, SNAP flags."
+        columns:
+          - name: d
+            description: "Day label matching sales_long.day, e.g. d_123"
+          - name: date
+          - name: wm_yr_wk
+          - name: weekday
+          - name: wday
+          - name: month
+          - name: year
+          - name: event_name_1
+          - name: event_type_1
+          - name: event_name_2
+          - name: event_type_2
+          - name: snap_ca
+          - name: snap_tx
+          - name: snap_wi
+
+      - name: sell_prices
+        description: "M5 weekly item-store selling prices."
+        columns:
+          - name: store_id
+          - name: item_id
+          - name: wm_yr_wk
+          - name: sell_price

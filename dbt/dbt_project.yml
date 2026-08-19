@@ -1,0 +1,35 @@
+name: 'supply_chain_stress'
+version: '1.0.0'
+config-version: 2
+
+profile: 'supply_chain_stress'
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  supply_chain_stress:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+
+vars:
+  # Pre-computed 80/20 chronological split day. This is scale-invariant:
+  # every series in M5 shares the identical day range (1..1913), so the
+  # 80th-percentile day position is the same regardless of how many
+  # items/stores are included. Matches src/preprocess.find_split_day's
+  # output exactly (verified during the validation-at-scale work).
+  # If the underlying M5 data ever changes (different day range), this
+  # must be recomputed -- see src/preprocess.find_split_day for the
+  # original logic this value was derived from.
+  split_day: 1531
+  stress_quantile: 0.90
