@@ -67,7 +67,11 @@ def test_model_info() -> None:
         response = client.get("/model-info")
         assert response.status_code == 200
         body = response.json()
-        assert body["model_type"] == "XGBClassifier"
+        # The model type is whatever's actually deployed (e.g.
+        # XGBClassifier, or CalibratedClassifierCV once calibration was
+        # shipped) -- assert the endpoint reports it correctly rather
+        # than hardcoding one specific class name.
+        assert body["model_type"] == config["model_type"]
         assert body["feature_count"] == 22
         assert body["default_threshold"] == pytest.approx(
             config["default_threshold"]

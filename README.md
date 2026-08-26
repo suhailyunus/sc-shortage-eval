@@ -142,7 +142,9 @@ not a detection system.
 
 Scores are not calibrated probabilities. `scale_pos_weight` shifts them
 upward by construction, so "0.80" is a rank cutoff rather than an
-80% likelihood.
+80% likelihood. This claim was tested directly, not just asserted --
+see "Probability Calibration" below for the reliability diagrams and
+what testing it actually changed (and didn't change).
 
 ## Engineering Practices
 
@@ -425,7 +427,14 @@ Example output:
 - Recall at the shipped threshold is now 0.03 on the full catalog under
   the corrected target definition (was 0.12 under the flawed one — a
   more honest number, not a regression). Most stress events are missed.
-- Predicted scores are not calibrated probabilities.
+- **[Resolved, see Probability Calibration] Predicted scores are not
+  calibrated probabilities.** Tested directly with a reliability diagram
+  and Brier score at both 100-item and full-catalog scale. Confirmed
+  genuinely miscalibrated at both scales (a raw "0.90" corresponds to
+  roughly 25-30% real likelihood, not 90%). Calibration barely changes
+  the dollar business-impact conclusion (isotonic/sigmoid calibration
+  preserve rank order), but it does mean every threshold number quoted
+  in this README should be read as a rank cutoff, not a probability.
 - Inventory position, replenishment schedules, supplier lead times,
   weather, and logistics disruptions are absent from the feature set and
   are plausibly more predictive than anything included here.
@@ -648,6 +657,91 @@ of the pattern.
 
 See `dbt/README.md` for architecture notes and full run instructions.
 
+## Probability Calibration
+
+Every limitations section in this project has said the same thing since
+early on: "predicted scores are not calibrated probabilities." That
+claim sat as an assumption for months. It was tested directly.
+
+**Method:** a three-way chronological split, not the usual train/test
+split used elsewhere in this project --
+
+    train        (day_num <= split_day)              -- trains the model, unchanged
+    calibration  (early part of the holdout period)   -- fits the calibrator ONLY
+    final_eval   (later part of the holdout period)    -- the only period used to report numbers
+
+This matters because reusing part of the existing holdout to fit a
+calibrator would mean that portion is no longer honestly held out for
+reporting. Splitting the holdout itself into two chronologically-ordered
+pieces keeps every "before vs. after" number in this section clean.
+
+**The claim was true, confirmed at two scales:**
+
+| Scale | Brier score, raw | Brier score, calibrated | What a raw "0.90" really means |
+|---|---:|---:|---|
+| 100-item | 0.2097 | 0.0759 (isotonic) | ~28% real likelihood |
+| Full catalog (30,490 series) | 0.2274 | 0.1052 (isotonic) | ~25-28% real likelihood |
+
+(0 = perfect, 0.25 = no better than guessing the base rate.) Both
+reliability diagrams show the same shape: raw scores sit well below the
+diagonal across the whole range, meaning the model is systematically
+*overconfident* -- a mechanical consequence of `scale_pos_weight`, which
+shifts scores upward by construction to help ranking under class
+imbalance, but was never meant to produce real probabilities.
+
+**What changed as a result, and what didn't:**
+
+The dollar business-impact conclusion **did not change** at either
+scale:
+
+| Scale | Raw ROI-optimal | Calibrated ROI-optimal |
+|---|---|---|
+| 100-item | threshold=0.91, net=+$2 | threshold=0.57, net=+$0 |
+| Full catalog | threshold=0.89, net=+$30,254 | threshold=0.51, net=+$30,138 |
+
+This was worth checking rather than assuming, because it directly tests
+whether the full-catalog "+$47K at threshold 0.90" finding reported
+earlier in this README was a real signal or an overconfidence artifact.
+**It's real.** The near-identical dollar outcomes aren't a coincidence:
+isotonic and sigmoid calibration are both *monotonic* -- they can
+relabel a score, but never reorder which observations rank above which
+others. Since the business-impact search finds the best-*ranked* subset
+regardless of what the scores are called, the optimal decision converges
+to nearly the same set of flagged observations whether the scores are
+calibrated or not.
+
+**What calibration is actually for, then:** not picking a better
+threshold -- the uncalibrated ranking was already good enough for that.
+It's for trusting the *number itself* as a real probability: reporting
+"there's roughly a 27% chance of stress" to a stakeholder, or feeding
+this model's output into another system that expects genuine
+probabilities (an ensemble, a cost-sensitive decision rule with its own
+independent probability estimate, etc.). Every threshold value quoted
+elsewhere in this README (0.80, 0.89, 0.90) should be read as a raw
+rank cutoff, not a calibrated likelihood -- that relabeling is now
+proven necessary, not just disclaimed.
+
+See `scripts/calibration_analysis.py` (100-item) and
+`scripts/build_full_catalog_calibration_chunks.py` +
+`scripts/train_calibrate_full_catalog.py` (full catalog) for the
+investigation code, and `reports/figures/calibration_curve.png` /
+`calibration_curve_full_catalog.png` for the reliability diagrams.
+
+**This was shipped, not just documented.** `scripts/deploy_calibrated_model.py`
+retrains, fits the isotonic calibrator on a clean calibration split, and
+saves the calibrated model as the actual artifact `src/predict.py`
+loads -- `models/model_config.json` now reports
+`"model_type": "CalibratedClassifierCV"`, `"calibrated": true`, and the
+Brier scores before/after as provenance. The deployed threshold moved
+from the old raw `0.80` to a calibrated `0.2801`, chosen specifically to
+flag the same alert volume as before (within 3.6%, limited by isotonic
+regression's tied "plateau" values) -- same workload for the reviewing
+analyst, honestly labeled scores. All 65 existing tests pass against the
+new artifact; two tests that had hardcoded an assumption of
+`XGBClassifier` as the only possible model type were updated to check
+the actual behavioral contract (`predict_proba`) instead, since that
+assumption was never supposed to be permanent.
+
 ## Future Work
 
 - Replace the proxy target with verified inventory or stockout outcomes.
@@ -786,17 +880,25 @@ correspond to a raised alert; `Low` and `Moderate` never do.
 | `threshold` to midpoint of the remaining range | High | Yes |
 | above that midpoint | Critical | Yes |
 
-At the shipped threshold of `0.80` this resolves to:
+At the shipped threshold of `0.2801` (the calibrated equivalent of the
+originally-chosen `0.80` raw cutoff -- see "Probability Calibration"
+above for why the number changed but the alert volume didn't) this
+resolves to:
 
 | Score | Business risk level | Alert raised |
 |---:|---|---|
-| `< 0.40` | Low | No |
-| `0.40–0.79` | Moderate | No |
-| `0.80–0.89` | High | Yes |
-| `>= 0.90` | Critical | Yes |
+| `< 0.14` | Low | No |
+| `0.14–0.28` | Moderate | No |
+| `0.28–0.64` | High | Yes |
+| `>= 0.64` | Critical | Yes |
 
-Scores are ranking values rather than calibrated probabilities, so these
-bands express relative priority, not likelihood.
+As of the calibration work described above, these scores ARE genuine
+calibrated probabilities, not raw ranking values -- e.g. a score of
+`0.28` really does mean roughly a 28% chance of a stress event, not an
+arbitrary rank cutoff. This is a change from this model's original
+behavior; older references to "scores are not calibrated" elsewhere in
+this README describe that prior, now-fixed state and are kept for the
+historical record.
 
 ## Web Interface
 

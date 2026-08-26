@@ -4,7 +4,6 @@ import json
 
 import pandas as pd
 import pytest
-from xgboost import XGBClassifier
 
 from src.predict import load_model_artifacts, predict_supply_stress
 
@@ -52,7 +51,12 @@ def test_load_model_artifacts_missing_directory_raises(tmp_path) -> None:
 
 def test_load_model_artifacts_returns_expected_types() -> None:
     model, feature_names, config = load_model_artifacts(models_dir="models")
-    assert isinstance(model, XGBClassifier)
+    # Whatever model type is deployed (XGBClassifier, or
+    # CalibratedClassifierCV once calibration was shipped), the actual
+    # contract this codebase depends on is predict_proba(). Testing that
+    # directly is more robust than hardcoding one implementation's class,
+    # and stays correct if the model type changes again later.
+    assert hasattr(model, "predict_proba")
     assert isinstance(feature_names, list)
     assert all(isinstance(name, str) for name in feature_names)
     assert isinstance(config, dict)
@@ -77,7 +81,7 @@ def test_load_model_artifacts_falls_back_to_pickle(tmp_path, monkeypatch) -> Non
     loaded_model, loaded_features, loaded_config = load_model_artifacts(
         models_dir=fallback_dir
     )
-    assert isinstance(loaded_model, XGBClassifier)
+    assert hasattr(loaded_model, "predict_proba")
     assert loaded_features == feature_names
     assert loaded_config == config
 

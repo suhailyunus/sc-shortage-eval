@@ -1,7 +1,12 @@
 {
-  "model_type": "XGBClassifier",
+  "model_type": "CalibratedClassifierCV",
   "positive_class": 1,
   "positive_class_label": "Supply Stress",
-  "default_threshold": 0.5,
-  "alternative_threshold": 0.5903593301773071
+  "default_threshold": 0.2801,
+  "alternative_threshold": null,
+  "calibration_method": "isotonic",
+  "calibrated": true,
+  "original_raw_threshold_replaced": 0.8,
+  "brier_score_raw": 0.2097,
+  "brier_score_calibrated": 0.0759
 }
