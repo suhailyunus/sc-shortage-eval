@@ -742,6 +742,37 @@ new artifact; two tests that had hardcoded an assumption of
 the actual behavioral contract (`predict_proba`) instead, since that
 assumption was never supposed to be permanent.
 
+## Model Comparison
+
+XGBoost was the model used from the start of this project, without ever
+being tested against alternatives -- flagged as open work in the
+earliest project notes. Tested directly: LightGBM and CatBoost, trained
+on identical data, features, chronological split, and class-imbalance
+handling (`scale_pos_weight` computed identically for all three, same
+~200-tree complexity budget, no extra tuning given to any one model).
+
+| Model | Average Precision | Brier score (raw) | ROI-optimal net |
+|---|---:|---:|---:|
+| XGBoost (shipped) | **0.2358** | 0.2095 | $0 |
+| LightGBM | 0.2298 | 0.2137 | $0 |
+| CatBoost | 0.2201 | **0.2135*** | $16 |
+
+*Brier scores for LightGBM and CatBoost are close enough that the
+difference isn't meaningful at this sample size.
+
+**Verdict: XGBoost's selection was already justified, not arbitrary.**
+It wins on average precision -- the metric that matters most since it's
+threshold-independent, unlike a single precision/recall pair. The
+ROI-optimal net differences ($0 vs $0 vs $16) are noise, not signal,
+consistent with everything else this project has found about the
+100-item-scale business case sitting right at breakeven regardless of
+model choice, threshold, or calibration.
+
+This is a case where testing an assumption confirmed it rather than
+overturning it -- worth stating plainly rather than searching for a
+more dramatic result. See `scripts/model_comparison.py` and
+`reports/figures/model_comparison.json` for the code and full numbers.
+
 ## Future Work
 
 - Replace the proxy target with verified inventory or stockout outcomes.

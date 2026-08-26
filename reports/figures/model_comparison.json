@@ -1,0 +1,26 @@
+{
+  "xgboost": {
+    "average_precision": 0.2358,
+    "brier_score_raw": 0.2095,
+    "precision_at_050": 0.1676,
+    "recall_at_050": 0.6836,
+    "roi_optimal_threshold": 0.96,
+    "roi_optimal_net": 0
+  },
+  "lightgbm": {
+    "average_precision": 0.2298,
+    "brier_score_raw": 0.2137,
+    "precision_at_050": 0.1646,
+    "recall_at_050": 0.6808,
+    "roi_optimal_threshold": 0.92,
+    "roi_optimal_net": 0
+  },
+  "catboost": {
+    "average_precision": 0.2201,
+    "brier_score_raw": 0.2135,
+    "precision_at_050": 0.1628,
+    "recall_at_050": 0.6488,
+    "roi_optimal_threshold": 0.93,
+    "roi_optimal_net": 16
+  }
+}

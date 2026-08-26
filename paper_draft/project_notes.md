@@ -1020,12 +1020,18 @@ A reusable prediction pipeline now:
 -   Replace the proxy target with verified stockout labels. *(Still
     open — no inventory data exists in M5.)*
 -   Add inventory and supplier lead-time features. *(Still open.)*
--   Calibrate probabilities. *(Still open — scores remain uncalibrated;
-    see case study limitations.)*
+-   Calibrate probabilities. *(Done — `scripts/deploy_calibrated_model.py`.
+    Confirmed genuinely miscalibrated (raw "0.90" was really ~25-28%
+    likely), fixed via isotonic calibration, and shipped as the actual
+    deployed model. See README "Probability Calibration".)*
 -   Monitor model drift. *(Done — `src/monitoring.py`, KS test/PSI,
     `POST /check-drift` endpoint.)*
 -   Add scheduled batch scoring. *(Still open.)*
--   Compare with LightGBM and CatBoost. *(Still open.)*
+-   Compare with LightGBM and CatBoost. *(Done —
+    `scripts/model_comparison.py`. XGBoost wins on average precision
+    (0.236 vs 0.230 LightGBM vs 0.220 CatBoost); ROI-optimal net is
+    within noise across all three ($0/$0/$16). XGBoost's selection is
+    justified, not arbitrary — see README "Model Comparison".)*
 -   Build a Streamlit dashboard. *(Done — see `frontend/`.)*
 -   Deploy as a REST API. *(Done — FastAPI, containerized, see
     `api/`.)*
@@ -1033,6 +1039,7 @@ A reusable prediction pipeline now:
 Also since completed but not anticipated in this list: two chronological
 data-leakage bugs found and fixed with regression tests, dependency
 lockfiles pinned and CI-verified, a store-volume confound in the stress
-target found (by external review) and fixed, and validation extended
-from 100 items to the complete 30,490-series catalog. See
+target found (by external review) and fixed, validation extended from
+100 items to the complete 30,490-series catalog, and a dbt/Snowflake
+data warehouse layer built and run against real data. See
 `paper_draft/case_study.md` for the full story.
