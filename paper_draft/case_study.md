@@ -254,9 +254,9 @@ then moved on to other work without closing it.
 Verified before touching any code: store-level stress-event rate ranged
 7.7%–19.9% across the 10 stores, correlated with store-level average
 sales volume at **Pearson r = 0.85**. That's not a subtle effect. Fixed
-by grouping the threshold on `(item_id, store_id)` instead of `item_id`
-alone — after the fix, the same correlation measured **r = 0.03**, and
-per-store rates tightened to 6.7%–8.1%.
+by grouping the threshold on (item_id, store_id) instead of item_id alone — 
+after the fix, the same correlation measured r = 0.034, and per-store 
+rates tightened to 10.3%–16.4% (down from the original 7.7%–19.9% spread).
 
 Recall dropped substantially at every threshold once the fix landed.
 That's the correct outcome, not a regression: a real share of the
