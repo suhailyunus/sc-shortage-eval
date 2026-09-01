@@ -42,3 +42,11 @@ dbt/target/
 dbt/logs/
 dbt/dbt_packages/
 dbt/package-lock.yml
+
+# LaTeX build artifacts
+paper_draft/*.aux
+paper_draft/*.log
+paper_draft/*.out
+
+# CatBoost training logs
+catboost_info/

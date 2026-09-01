@@ -675,57 +675,79 @@ calibrator would mean that portion is no longer honestly held out for
 reporting. Splitting the holdout itself into two chronologically-ordered
 pieces keeps every "before vs. after" number in this section clean.
 
-**The claim was true, confirmed at two scales:**
+**The claim was true, confirmed at two scales -- and the reference
+number matters.** A naive "Brier score of 0.25 = no better than
+guessing" is wrong whenever the event rate isn't 50/50, which it never
+is here. The correct no-skill reference for a rare event is `p(1-p)`
+(prevalence times one minus prevalence), which is well below 0.25 for
+an ~9-13% base rate. Reporting against the correct reference changes
+the story: calibration fixed severe overconfidence, but the resulting
+probabilistic skill *above that baseline* is real but modest.
 
-| Scale | Brier score, raw | Brier score, calibrated | What a raw "0.90" really means |
-|---|---:|---:|---|
-| 100-item | 0.2097 | 0.0759 (isotonic) | ~28% real likelihood |
-| Full catalog (30,490 series) | 0.2274 | 0.1052 (isotonic) | ~25-28% real likelihood |
+| Scale | Prevalence | Reference Brier (`p(1-p)`) | Raw Brier | Calibrated Brier | Brier Skill Score |
+|---|---:|---:|---:|---:|---:|
+| 1,000 series | 0.093 | 0.084 | 0.235 | 0.081 | 0.039 |
+| Full catalog (30,490 series) | 0.127 | 0.111 | 0.227 | 0.105 | 0.048 |
 
-(0 = perfect, 0.25 = no better than guessing the base rate.) Both
-reliability diagrams show the same shape: raw scores sit well below the
-diagonal across the whole range, meaning the model is systematically
+Brier Skill Score = `1 - (calibrated Brier / reference Brier)`. A
+value of ~0.04-0.05 means calibration recovers only 4-5% of the
+theoretically available improvement over a trivial constant-prevalence
+forecast -- real, but modest, not the dramatic-sounding win the raw
+Brier improvement (0.235 → 0.081) suggests on its own. Both reliability
+diagrams show the same shape: raw scores sit well below the diagonal
+across the whole range, meaning the model is systematically
 *overconfident* -- a mechanical consequence of `scale_pos_weight`, which
 shifts scores upward by construction to help ranking under class
 imbalance, but was never meant to produce real probabilities.
 
-**What changed as a result, and what didn't:**
+**What changed as a result, and what didn't -- and here the distinction
+between an ex-ante policy and a retrospective oracle matters.** An
+*ex-ante* threshold is chosen on the calibration period and then
+applied once, unseen, to final evaluation -- a real decision rule. A
+*retrospective oracle* threshold is chosen and evaluated on the same
+final-evaluation data -- an upper-bound diagnostic, not a deployable
+policy, and the two should never be quoted as if they were the same
+kind of number.
 
-The dollar business-impact conclusion **did not change** at either
-scale:
-
-| Scale | Raw ROI-optimal | Calibrated ROI-optimal |
-|---|---|---|
-| 100-item | threshold=0.91, net=+$2 | threshold=0.57, net=+$0 |
-| Full catalog | threshold=0.89, net=+$30,254 | threshold=0.51, net=+$30,138 |
+At the full-catalog scale: the ex-ante raw threshold (0.9041) and its
+isotonic-calibrated equivalent (0.5498) select the **exact same set**
+of final-evaluation observations -- 6,922 alerts, 5,085 true positives,
+1,837 false positives, and therefore the identical net of **+$28,806**.
+This isn't approximate; it's guaranteed by isotonic calibration being
+monotonic (it relabels scores but never reorders them), so a threshold
+chosen at the same rank position produces the same decision regardless
+of which score scale it's expressed in. The two thresholds' *oracle*
+values, by contrast, are not identical (+$30,506 raw vs. +$30,070
+isotonic) -- the oracle search re-optimizes independently on final-eval
+for each score scale, and isotonic's tied "plateau" values mean the two
+searches aren't guaranteed to land on the same rank position.
 
 This was worth checking rather than assuming, because it directly tests
-whether the full-catalog "+$47K at threshold 0.90" finding reported
-earlier in this README was a real signal or an overconfidence artifact.
-**It's real.** The near-identical dollar outcomes aren't a coincidence:
-isotonic and sigmoid calibration are both *monotonic* -- they can
-relabel a score, but never reorder which observations rank above which
-others. Since the business-impact search finds the best-*ranked* subset
-regardless of what the scores are called, the optimal decision converges
-to nearly the same set of flagged observations whether the scores are
-calibrated or not.
+whether the full-catalog "positive ROI" finding reported earlier in
+this README was a real signal or an overconfidence artifact. **It's
+real** -- calibration doesn't undo it, it just relabels the threshold
+that achieves it.
 
 **What calibration is actually for, then:** not picking a better
 threshold -- the uncalibrated ranking was already good enough for that.
 It's for trusting the *number itself* as a real probability: reporting
-"there's roughly a 27% chance of stress" to a stakeholder, or feeding
+"there's roughly a 25-28% chance of stress" to a stakeholder, or feeding
 this model's output into another system that expects genuine
 probabilities (an ensemble, a cost-sensitive decision rule with its own
 independent probability estimate, etc.). Every threshold value quoted
 elsewhere in this README (0.80, 0.89, 0.90) should be read as a raw
-rank cutoff, not a calibrated likelihood -- that relabeling is now
-proven necessary, not just disclaimed.
+rank cutoff, not a calibrated likelihood.
 
-See `scripts/calibration_analysis.py` (100-item) and
-`scripts/build_full_catalog_calibration_chunks.py` +
-`scripts/train_calibrate_full_catalog.py` (full catalog) for the
-investigation code, and `reports/figures/calibration_curve.png` /
-`calibration_curve_full_catalog.png` for the reliability diagrams.
+See `scripts/paper_audit.py` (confound verification + 1,000-series
+calibration audit) and `scripts/train_calibrate_full_catalog.py`
+(full-catalog calibration, ex-ante vs. oracle economics) for the
+verified, reproducible code behind every number above, and
+`paper_draft/generated/` for the machine-readable outputs and
+reliability-diagram figures. `scripts/model_comparison_robust.py`
+extends this same three-way-split, oracle-vs-ex-ante methodology to a
+model-family robustness check (XGBoost vs. LightGBM vs. CatBoost vs.
+logistic regression); see `paper_draft/paper.tex`, Section
+"Model-Family Robustness," for the results.
 
 **This was shipped, not just documented.** `scripts/deploy_calibrated_model.py`
 retrains, fits the isotonic calibrator on a clean calibration split, and
@@ -746,32 +768,62 @@ assumption was never supposed to be permanent.
 
 XGBoost was the model used from the start of this project, without ever
 being tested against alternatives -- flagged as open work in the
-earliest project notes. Tested directly: LightGBM and CatBoost, trained
-on identical data, features, chronological split, and class-imbalance
-handling (`scale_pos_weight` computed identically for all three, same
-~200-tree complexity budget, no extra tuning given to any one model).
+earliest project notes. An earlier version of this comparison used a
+single 100-item run with thresholds selected and evaluated on the same
+holdout -- an oracle-style estimate inconsistent with the three-way
+chronological split used everywhere else in this project once
+calibration work began. It's been rerun under that same standard:
+identical train/calibration/final-evaluation periods, the corrected
+item-store label, three seeds varying each model's own bagging
+randomness (`subsample`/`colsample_bytree` below 1.0 so `random_state`
+actually produces different models -- an earlier version of this script
+left them at their 1.0 defaults and silently produced identical results
+across seeds, caught only by inspecting the output), complexity matched
+by early stopping on the calibration period rather than forcing
+identical hyperparameters across libraries, and the same
+oracle-versus-ex-ante threshold separation used in the calibration work
+above.
 
-| Model | Average Precision | Brier score (raw) | ROI-optimal net |
-|---|---:|---:|---:|
-| XGBoost (shipped) | **0.2358** | 0.2095 | $0 |
-| LightGBM | 0.2298 | 0.2137 | $0 |
-| CatBoost | 0.2201 | **0.2135*** | $16 |
+| Model | AP | BSS (calibrated) | Ex-ante net | Oracle net |
+|---|---:|---:|---:|---:|
+| XGBoost | 0.179 [0.166, 0.185] | 0.035 [0.028, 0.039] | +$11 [0, 34] | +$48 [0, 134] |
+| CatBoost | 0.182 [0.181, 0.183] | 0.036 [0.036, 0.037] | -$34 [-110, 20] | +$15 [8, 20] |
+| LightGBM | 0.150 [0.147, 0.152] | 0.024 [0.022, 0.025] | $0 [0, 0] | $0 [0, 0] |
+| Logistic regression | 0.134 [fixed] | 0.012 [fixed] | -$14 [fixed] | -$14 [fixed] |
 
-*Brier scores for LightGBM and CatBoost are close enough that the
-difference isn't meaningful at this sample size.
+Brier Skill Score (BSS) is reported on isotonic-calibrated scores, not
+raw scores -- raw class-weighted scores from every boosted-tree model
+here have deeply negative raw-score BSS despite good ranking (AP), the
+same overconfidence phenomenon documented above, not a defect specific
+to any one library.
 
-**Verdict: XGBoost's selection was already justified, not arbitrary.**
-It wins on average precision -- the metric that matters most since it's
-threshold-independent, unlike a single precision/recall pair. The
-ROI-optimal net differences ($0 vs $0 vs $16) are noise, not signal,
-consistent with everything else this project has found about the
-100-item-scale business case sitting right at breakeven regardless of
-model choice, threshold, or calibration.
+**Verdict: XGBoost and CatBoost are consistently and clearly ahead of
+LightGBM and logistic regression on ranking and calibrated probability
+quality; XGBoost and CatBoost themselves are not meaningfully
+distinguishable** -- their ranges overlap, and which one nominally
+leads is itself sensitive to the exact software environment (rerunning
+this script in a different environment with slightly different library
+versions swapped their order). The economic differences are noise for
+every model except logistic regression, which is genuinely worse on
+every metric including its own oracle upper bound -- consistent with
+everything else this project has found about the 100-item-scale
+business case sitting near breakeven regardless of model choice,
+threshold, or calibration.
+
+One nuance worth keeping: LightGBM's *raw*, uncalibrated Brier score
+(~0.084, across all three seeds) sits almost exactly at the
+prevalence-only reference, while XGBoost's and CatBoost's raw Brier
+scores (~0.23-0.24) are roughly 2.7x worse than that reference before
+calibration -- LightGBM is substantially better calibrated out of the
+box here, at the cost of weaker ranking. Ranking quality and
+calibration quality are separable properties; a library's default
+behavior on one doesn't predict its behavior on the other.
 
 This is a case where testing an assumption confirmed it rather than
 overturning it -- worth stating plainly rather than searching for a
-more dramatic result. See `scripts/model_comparison.py` and
-`reports/figures/model_comparison.json` for the code and full numbers.
+more dramatic result. See `scripts/model_comparison_robust.py` and
+`paper_draft/generated/model_comparison_robust.json` for the code and
+full numbers.
 
 ## Future Work
 

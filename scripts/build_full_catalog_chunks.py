@@ -164,11 +164,17 @@ def process_store(store_id: str, split_day: int, thresholds: pl.DataFrame, calen
 
     train_df = pd.DataFrame(X_np[sub_idx], columns=feature_names)
     train_df["stress_event"] = y[sub_idx]
+    # _day_num is chronological metadata, not a model feature -- needed
+    # downstream by scripts/train_calibrate_full_catalog.py to build a
+    # genuinely chronological calibration/final-evaluation split.
+    # METADATA_COLUMNS in that script excludes it from the feature set.
+    train_df["_day_num"] = day_num[sub_idx]
     train_df.to_parquet(out_train, index=False)
 
     holdout_idx = np.where(holdout_mask)[0]
     holdout_df = pd.DataFrame(X_np[holdout_idx], columns=feature_names)
     holdout_df["stress_event"] = y[holdout_idx]
+    holdout_df["_day_num"] = day_num[holdout_idx]
     holdout_df.to_parquet(out_holdout, index=False)
 
     elapsed = time.time() - t0

@@ -132,7 +132,11 @@ def run_full_catalog(chunk_dir: str = "."):
         )
 
     train_df = pd.concat([pd.read_parquet(f) for f in train_files], ignore_index=True)
-    feature_cols = [c for c in train_df.columns if c != "stress_event"]
+    # Exclude _day_num: chronological metadata added by
+    # build_full_catalog_chunks.py for scripts/train_calibrate_full_catalog.py's
+    # chronological split, not a model feature. Letting it into the
+    # feature set would hand the model a literal, high-signal timestamp.
+    feature_cols = [c for c in train_df.columns if c not in ("stress_event", "_day_num")]
     X_train = train_df[feature_cols].to_numpy(dtype="float32")
     y_train = train_df["stress_event"].to_numpy()
     del train_df
