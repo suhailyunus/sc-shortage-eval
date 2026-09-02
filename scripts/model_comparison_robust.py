@@ -72,6 +72,8 @@ OUT_DIR = Path("paper_draft/generated")
 
 
 def net_at_threshold(y_true, probs, threshold):
+    if threshold is None:
+        return 0  # no-alert policy: net is 0 by definition, nothing to compute
     preds = (probs >= threshold).astype(int)
     tp = int(((preds == 1) & (y_true == 1)).sum())
     fp = int(((preds == 1) & (y_true == 0)).sum())
@@ -79,12 +81,36 @@ def net_at_threshold(y_true, probs, threshold):
 
 
 def best_threshold_and_net(y_true, probs):
-    best_net, best_thr = None, None
-    for threshold in np.arange(0.02, 0.99, 0.01):
-        net = net_at_threshold(y_true, probs, threshold)
-        if best_net is None or net > best_net:
-            best_net, best_thr = net, threshold
-    return float(best_thr), best_net
+    """
+    Select the best attainable single-threshold policy, including the
+    always-available no-alert option (net=0).
+
+    Adopted from scripts/paper_audit.py and
+    scripts/train_calibrate_full_catalog.py's identical implementation,
+    for full methodological consistency across every table in the paper
+    -- an earlier version of this function used a coarse 0.01-step grid
+    search (np.arange(0.02, 0.99, 0.01)) with no explicit no-alert
+    floor, which could report an impossible negative "oracle" value
+    when a model's highest-scored observation was itself a false
+    positive and no grid point was high enough to exclude it. Testing
+    every achievable distinct threshold (via tied-score group
+    endpoints) rather than a fixed grid is also strictly more precise:
+    it cannot miss a better threshold that happened to fall between
+    grid points.
+    """
+    y = np.asarray(y_true, dtype=np.int8)
+    p = np.asarray(probs, dtype=float)
+    order = np.argsort(-p, kind="mergesort")
+    sorted_p, sorted_y = p[order], y[order]
+    tp = np.cumsum(sorted_y)
+    fp = np.cumsum(1 - sorted_y)
+    group_ends = np.r_[np.flatnonzero(sorted_p[:-1] != sorted_p[1:]), len(sorted_p) - 1]
+    nets = (FN_COST - TP_COST) * tp[group_ends] - FP_COST * fp[group_ends]
+    best = int(np.argmax(nets))
+    if float(nets[best]) <= 0:
+        return None, 0  # no-alert policy: always achievable, net=0 by definition
+    endpoint = int(group_ends[best])
+    return float(sorted_p[endpoint]), int(nets[best])
 
 
 def brier_skill_score(y_true, probs):
@@ -164,9 +190,9 @@ def evaluate_model(model, X_calib, y_calib, X_eval, y_eval):
         "raw_brier": round(raw_bs, 4),
         "calibrated_brier": round(calibrated_bs, 4),
         "calibrated_bss": round(calibrated_bss, 4),
-        "ex_ante_threshold": round(ex_ante_threshold, 4),
+        "ex_ante_threshold": round(ex_ante_threshold, 4) if ex_ante_threshold is not None else None,
         "ex_ante_net": ex_ante_net,
-        "oracle_threshold": round(oracle_threshold, 4),
+        "oracle_threshold": round(oracle_threshold, 4) if oracle_threshold is not None else None,
         "oracle_net": oracle_net,
     }
 

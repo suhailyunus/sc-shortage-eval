@@ -33,7 +33,7 @@
 \maketitle
 
 \begin{abstract}
-Public retail data rarely record stockouts or unfulfilled orders, so supervised risk models often use proxy labels. We study an M5-derived label for next-day ``demand stress'' and show why validation of the label is distinct from validation of the classifier. Two temporal leakage defects in an early pipeline were caught by mechanism-level regression tests even though holdout metrics appeared plausible. More importantly, the original 90th-percentile threshold pooled each item across ten stores. Under that definition, store-level stress rate was strongly associated with store sales volume ($r=0.853$, $p=0.0017$; $n=10$ stores), and the association remained within item across 30{,}490 item-store series ($r=0.369$). A series-normalized item-store threshold, which matches our intended estimand of demand unusual for a location's own history, reduced these correlations to $r=0.043$ and $r=-0.060$, respectively. This is an estimand change, not a universally correct label for every supply-chain decision. We then audit class-weighted XGBoost scores using chronologically disjoint training, calibration, and final-evaluation periods. Isotonic calibration improved Brier score from 0.2351 to 0.0812 on 1{,}000 series and from 0.2274 to 0.1053 on the full catalog. Against the appropriate prevalence-only references, however, the calibrated Brier Skill Scores were only 0.039 and 0.048. Calibration therefore repaired severe overconfidence but delivered modest probabilistic skill. Under stated constant costs, thresholds selected before final evaluation produced similar, though not identical, outcomes before and after calibration. A model-family robustness check confirms these conclusions are not an artifact of the specific gradient-boosting library used. The case study demonstrates that proxy-label grouping, temporal independence, probability meaning, and operating-policy selection require separate tests.
+Public retail data rarely record stockouts or unfulfilled orders, so supervised risk models often use proxy labels. We study an M5-derived label for next-day ``demand stress'' and show why validation of the label is distinct from validation of the classifier. Two temporal leakage defects in an early pipeline were caught by mechanism-level regression tests even though holdout metrics appeared plausible. More importantly, the original 90th-percentile threshold pooled each item across ten stores. Under that definition, store-level stress rate was strongly associated with store sales volume ($r=0.853$, $p=0.0017$; $n=10$ stores), and the association remained within item across 30{,}490 item-store series ($r=0.369$, computed from item-demeaned residuals of both volume and stress rate). A series-normalized item-store threshold, which matches our intended estimand of demand unusual for a location's own history, reduced these correlations to $r=0.043$ and $r=-0.060$, respectively. This is an estimand change, not a universally correct label for every supply-chain decision. We then audit class-weighted XGBoost scores using chronologically disjoint training, calibration, and final-evaluation periods. Isotonic calibration improved Brier score from 0.2351 to 0.0812 on 1{,}000 series and from 0.2274 to 0.1053 on the full catalog. Against the appropriate prevalence-only references, however, the calibrated Brier Skill Scores were only 0.039 and 0.048. Calibration therefore repaired severe overconfidence but delivered modest probabilistic skill. Under stated constant costs, a threshold selected before final evaluation produced an identical alert set and net value whether expressed in raw or calibrated units in this run, while the two scales' retrospective oracle thresholds did not coincide -- calibration changes what a score means far more than it changes the ex-ante decision, though the two searches are not guaranteed to agree in general. A model-family robustness check supports the conclusion that these findings are not an artifact of the specific gradient-boosting library used. The case study demonstrates that proxy-label grouping, temporal independence, probability meaning, and operating-policy selection require separate tests.
 \end{abstract}
 
 \section{Introduction}
@@ -58,13 +58,17 @@ The contribution is not a new algorithm or a stockout model. It is a documented 
 
 \textbf{Benchmark dataset.} The M5 Forecasting competition \citep{makridakis2022m5} evaluated point-forecast accuracy on 42{,}840 hierarchical unit-sales series from Walmart; we use its constituent sales, calendar, and pricing files but repurpose the task from demand forecasting to binary stress classification, a proxy-label reframing not evaluated in the original competition.
 
-\textbf{Data leakage.} \citet{kaufman2012leakage} formalize leakage in predictive modeling as the introduction of information about the target that would not legitimately be available at prediction time, and argue that a strict \emph{learn-predict separation} is the primary defense. The two leakage defects we report (Section~\ref{sec:leakage}) are concrete instances of exactly this failure mode in a time-series setting, where the temporal ordering of the data is the specific axis along which separation must be enforced.
+\textbf{Proxy labels and target variable construction.} \citet{obermeyer2019dissecting} show that a widely deployed healthcare algorithm, trained to predict health-care \emph{cost} as a proxy for health \emph{need}, encoded substantial racial bias because the two constructs diverge systematically -- patients with equal need but unequal historical spending received unequal predicted risk. \citet{guerdan2025measurement} interview practicing data scientists and find that target variable construction for an unobservable construct is routinely a negotiated, iterative process balancing validity against predictability, simplicity, and resource constraints, rather than a single well-specified choice. The store-volume confound in Section~\ref{sec:confound} is a concrete instance of the general failure mode both papers describe: a proxy (a pooled percentile threshold) that is predictable and stable under standard evaluation, yet systematically diverges from the construct it was meant to represent (demand unusual for a specific location, not aggregate sales volume).
 
-\textbf{Demand classification.} \citet{syntetos2005categorization} propose classifying demand series by average inter-demand interval and the squared coefficient of variation of demand sizes, yielding the smooth/erratic/intermittent/lumpy taxonomy we use to design a stratified sample (Section~\ref{sec:scale}) that deliberately oversamples the harder, more business-relevant intermittent and lumpy segments rather than sampling uniformly at random.
+\textbf{Weak supervision and label noise.} \citet{ratner2017snorkel} formalize the broader practice of constructing training labels from heuristic, potentially correlated, and imperfect sources rather than exhaustive manual annotation, and provide tooling to model and denoise the resulting label uncertainty explicitly. \citet{frenay2014classification} survey the consequences of label noise for classifier training and evaluation, including the risk that a systematic (non-random) noise process -- as opposed to independent, random mislabeling -- can bias a model's learned decision boundary in a specific, predictable direction. Our stress label is not weakly supervised in the technical sense of combining multiple heuristic labeling functions, but the item-only threshold's systematic, volume-correlated error (Section~\ref{sec:confound}) is exactly the kind of structured, non-random label noise this literature treats as more consequential than i.i.d.\ label flipping.
+
+\textbf{Demand classification.} \citet{syntetos2005categorization} propose classifying demand series by average inter-demand interval and the squared coefficient of variation of demand sizes, yielding the smooth/erratic/intermittent/lumpy taxonomy we use to design a stratified sample (Section~\ref{sec:scale}) that deliberately oversamples the harder, more business-relevant intermittent and lumpy segments rather than sampling uniformly at random. \citet{hyndman2011optimal} address a related but distinct problem in retail and tourism demand: reconciling independently produced forecasts across a hierarchy (item, store, region) so that aggregated and disaggregated forecasts remain mutually consistent. We do not perform hierarchical reconciliation -- each item-store series is modeled independently -- but the store-volume confound in Section~\ref{sec:confound} is itself evidence that a modeling decision made at one level of the M5 hierarchy (a threshold pooled across the store level) can silently reintroduce store-level structure into what is intended to be an item-store-level label, the same cross-level leakage concern that motivates reconciliation methods in the forecasting literature. \citet{liu2025machine} apply classical machine learning directly to inventory stockout prediction on a large-scale (1.6 million SKU), severely imbalanced retail dataset, and report that near-term demand signal and current inventory level are the dominant predictors; our work addresses a harder-to-observe adjacent problem -- M5 contains no inventory field, so stockout itself cannot be the label -- but shares the same class-imbalance and large-scale evaluation concerns their study raises.
+
+\textbf{Data leakage.} \citet{kaufman2012leakage} formalize leakage in predictive modeling as the introduction of information about the target that would not legitimately be available at prediction time, and argue that a strict \emph{learn-predict separation} is the primary defense. The two leakage defects we report (Section~\ref{sec:leakage}) are concrete instances of exactly this failure mode in a time-series setting, where the temporal ordering of the data is the specific axis along which separation must be enforced.
 
 \textbf{Gradient boosting.} We use XGBoost \citep{chen2016xgboost} as the primary classifier. Model-family novelty is not claimed; a logistic regression baseline is included to contextualize probabilistic performance, and Section~\ref{sec:modelrobustness} compares against LightGBM \citep{ke2017lightgbm} and CatBoost \citep{prokhorenkova2018catboost}.
 
-\textbf{Probability calibration.} \citet{niculescu2005predicting} show that boosted trees systematically distort predicted probabilities away from 0 and 1 in a characteristic sigmoid-shaped pattern, and evaluate Platt scaling \citep{platt1999probabilistic} and isotonic regression \citep{zadrozny2002transforming} as corrections. Our finding (Section~\ref{sec:calibration}) that a boosted-tree model trained with class-imbalance reweighting is severely miscalibrated is consistent with this literature; our contribution is showing, on a real cost-sensitive decision problem, that the correction changes what a score \emph{means} far more than it changes which decision the score implies.
+\textbf{Probability calibration.} \citet{niculescu2005predicting} show that boosted trees systematically distort predicted probabilities away from 0 and 1 in a characteristic sigmoid-shaped pattern, and evaluate Platt scaling \citep{platt1999probabilistic} and isotonic regression \citep{zadrozny2002transforming} as corrections. \citet{wallace2012class} address the specific interaction we rely on throughout Section~\ref{sec:calibration}: they show that class-imbalance correction techniques (including the cost-reweighting approach used here via \texttt{scale\_pos\_weight}) systematically bias the resulting probability estimates, and that this bias is a separate problem from the ranking-quality benefit such techniques are adopted for. Our finding that a boosted-tree model trained with class-imbalance reweighting is severely miscalibrated, yet retains good ranking quality, is a direct empirical instance of the ranking/calibration separation both bodies of literature predict; our contribution is showing, on a real cost-sensitive decision problem, that the correction changes what a score \emph{means} far more than it changes which decision the score implies.
 
 \section{Dataset and Proxy Target Definition}
 \label{sec:target}
@@ -74,7 +78,7 @@ M5 provides daily unit sales for 3{,}049 items across 10 stores in 3 U.S. states
 No inventory, stockout, or supplier-delay signal exists anywhere in M5. We therefore define a proxy target:
 
 \begin{equation}
-\text{stress\_event}_{i,s,t} = \mathbb{1}\left[\text{sales}_{i,s,t} > Q_{0.90}\big(\text{sales}_{i,s,\cdot} \mid t' \le t_{\text{split}}\big)\right]
+\text{stress\_event}_{i,s,t} = \mathbf{1}\left\{\text{sales}_{i,s,t} > Q_{0.90}\big(\text{sales}_{i,s,\cdot} \mid t' \le t_{\text{split}}\big)\right\}
 \end{equation}
 
 for item $i$, store $s$, and day $t$. The model uses information available through day $t-1$ to predict whether day $t$ exceeds the fixed threshold. The quantile is estimated only from days on or before $t_{\text{split}}$ and then applied to later periods. Because unit sales are discrete and often zero, the strict $>$ rule does not force the realized event rate to equal 10\%.
@@ -103,7 +107,7 @@ The mechanism is direct: pooling sales across stores means a single threshold is
 
 \subsection{Verification}
 
-We computed each store's holdout stress rate and average daily sales. Because ten aggregated observations provide limited precision, we report a $p$-value and Fisher interval and supplement the store-level result with a within-item analysis over all 30{,}490 item-store series.
+We computed each store's holdout stress rate and average daily sales. Because ten aggregated observations provide limited precision, we report a $p$-value and Fisher interval and supplement the store-level result with a within-item analysis over all 30{,}490 item-store series: for each series we compute the item-level mean of both mean daily sales and the stress rate, subtract that item-level mean from the series' own value (demeaning both variables within item), and Pearson-correlate the resulting residuals. This removes any correlation attributable to differences between items and isolates the association specifically attributable to differences between stores carrying the same item.
 
 \begin{table}[h]
 \centering
@@ -226,9 +230,9 @@ Calibration produces a large absolute Brier improvement, but the correct referen
 
 \subsection{Why calibration barely changes the business decision}
 
-Platt scaling is strictly monotone, while isotonic regression is non-decreasing and can collapse observations into tied plateaus. Neither reverses an ordering, so a threshold selected at a given rank position on the calibration period selects the identical set of final-evaluation observations whether it is expressed in raw or calibrated units.
+Platt scaling is strictly monotone. Isotonic regression is only \emph{non-decreasing}: it can collapse groups of distinct raw scores into tied plateaus, so a single calibrated threshold is not in general guaranteed to reproduce the exact alert set that a raw threshold at the same nominal rank position would select. This is a real possibility, not a technicality -- tied plateaus are precisely why the retrospective oracle search below lands on different alert counts for the two score scales.
 
-At full scale, the raw threshold selected on the calibration period was 0.9041 and produced \$28{,}806 on final evaluation; the corresponding isotonic threshold was 0.5498. Because threshold selection here operates on rank position and isotonic calibration preserves rank order exactly, this isotonic threshold selects the identical alert set (6{,}922 alerts; 5{,}085 true positives; 1{,}837 false positives) and therefore the identical \$28{,}806 net -- the ex-ante policy value is not merely similar but mathematically identical under a single global threshold and constant per-case costs. The two thresholds' \emph{retrospective} final-period oracle values, by contrast, are not identical (\$30{,}506 raw versus \$30{,}070 isotonic), because the oracle search independently re-optimizes the threshold on final-evaluation data for each score scale, and isotonic's tied plateaus mean the two searches are not guaranteed to land on matching rank positions. With heterogeneous case costs or decisions that consume probabilities directly, calibration can still affect the action itself; it did not in this single-threshold, constant-cost setting's ex-ante policy specifically.
+At full scale, we verified the ex-ante case directly rather than assuming the general guarantee applies: the raw threshold selected on the calibration period was 0.9041, producing \$28{,}806 on final evaluation (6{,}922 alerts; 5{,}085 true positives; 1{,}837 false positives). The corresponding isotonic threshold, 0.5498, was applied independently to the isotonic-calibrated final-evaluation scores and produced the identical alert count, true-positive count, false-positive count, and \$28{,}806 net. In this specific run, no tied plateau happened to fall across the decision boundary, so the two policies coincided exactly -- but this is an empirical outcome of this particular score distribution, not a property guaranteed by isotonic calibration in general, and a different dataset or threshold could see the two policies diverge. The two thresholds' \emph{retrospective} final-period oracle values are not identical (\$30{,}506 raw versus \$30{,}070 isotonic), because the oracle search independently re-optimizes the threshold on final-evaluation data for each score scale, and isotonic's tied plateaus mean the two searches are not guaranteed to land on matching rank positions -- this divergence is the concrete manifestation of the general non-guarantee. With heterogeneous case costs or decisions that consume probabilities directly, calibration can still affect the action itself; it did not in this single-threshold, constant-cost ex-ante comparison specifically, but that should be read as an empirical finding for this case, not a general property of isotonic calibration.
 
 \subsection{Serving artifact versus operating policy}
 \label{sec:deployment}
@@ -240,26 +244,30 @@ The repository's served artifact is isotonic-calibrated. A calibrated threshold 
 
 The results in Sections~\ref{sec:scale} and \ref{sec:calibration} use XGBoost \citep{chen2016xgboost} throughout, selected at the start of this project without being tested against alternatives. An earlier version of this comparison reported a single 100-item run with thresholds selected and evaluated on the same holdout -- an oracle-style estimate presented as if it were a reliable conclusion, and inconsistent with the three-way chronological split used everywhere else in this paper. We rerun it here under the same standard as Section~\ref{sec:calibration}: identical train/calibration/final-evaluation periods, the corrected item-store label, three seeds varying each model's own bagging randomness, complexity matched by early stopping on the calibration period rather than forcing identical hyperparameters across libraries with different regularization behavior, and the same oracle-versus-ex-ante threshold separation used throughout.
 
-We compare XGBoost against LightGBM \citep{ke2017lightgbm}, CatBoost \citep{prokhorenkova2018catboost}, and a logistic regression baseline, at the 1{,}000-series scale. Following Section~\ref{sec:calibration}'s convention, Brier Skill Score is reported on isotonic-calibrated scores, since raw class-weighted scores from every boosted-tree model here have deeply negative raw-score BSS despite good ranking (Average Precision) -- an expected consequence of severe raw overconfidence, not a defect specific to any one library, and the same phenomenon already implied by Table~\ref{tab:calibration}'s own raw-versus-reference Brier gap.
+We compare XGBoost against LightGBM \citep{ke2017lightgbm}, CatBoost \citep{prokhorenkova2018catboost}, and a logistic regression baseline, at the 1{,}000-series scale. Following Section~\ref{sec:calibration}'s convention, Brier Skill Score is reported on isotonic-calibrated scores, since raw class-weighted scores from every boosted-tree model here have deeply negative raw-score BSS despite good ranking (Average Precision) -- an expected consequence of severe raw overconfidence, not a defect specific to any one library, and the same phenomenon already implied by Table~\ref{tab:calibration}'s own raw-versus-reference Brier gap. Both the ex-ante and oracle threshold searches use the same exact, tied-group-endpoint algorithm as Sections~\ref{sec:scale} and \ref{sec:calibration}, which explicitly includes a no-alert candidate; an earlier version of this script used a coarse fixed grid without that safeguard and could report an oracle value below \$0, which is not attainable since flagging nothing is always an available policy.
 
 \begin{table}[h]
 \centering
-\caption{Model-family comparison, 1{,}000-series scale, corrected label, mean [range] across 3 seeds. Brier Skill Score (BSS) is reported after isotonic calibration, matching Section~\ref{sec:calibration}'s convention.}
+\caption{Model-family comparison, 1{,}000-series scale, corrected label, mean [range] across three algorithmic-randomness seeds on this fixed sample (see caveat below). Brier Skill Score (BSS) is reported after isotonic calibration, matching Section~\ref{sec:calibration}'s convention.}
 \label{tab:modelrobust}
 \small
 \begin{tabular}{lrrrr}
 \toprule
-Model & AP & BSS (calibrated) & Ex-ante net & Oracle net \\
+Model & AP (raw scores) & BSS (calibrated) & Ex-ante net & Oracle net \\
 \midrule
-XGBoost & 0.179 [0.166, 0.185] & 0.035 [0.028, 0.039] & $+\$11$ [0, 34] & $+\$48$ [0, 134] \\
-CatBoost & 0.182 [0.181, 0.183] & 0.036 [0.036, 0.037] & $-\$34$ [$-110$, 20] & $+\$15$ [8, 20] \\
-LightGBM & 0.150 [0.147, 0.152] & 0.024 [0.022, 0.025] & \$0 [0, 0] & \$0 [0, 0] \\
-Logistic regression & 0.134 [fixed] & 0.012 [fixed] & $-\$14$ [fixed] & $-\$14$ [fixed] \\
+XGBoost & 0.179 [0.166, 0.186] & 0.036 [0.028, 0.039] & $+\$23$ [0, 70] & $+\$41$ [0, 104] \\
+CatBoost & 0.182 [0.182, 0.183] & 0.036 [0.036, 0.037] & $-\$10$ [$-54$, 16] & $+\$38$ [34, 46] \\
+LightGBM & 0.150 [0.147, 0.153] & 0.024 [0.022, 0.025] & \$0 [0, 0] & \$0 [0, 0] \\
+Logistic regression & 0.134 [fixed] & 0.012 [fixed] & \$0 [fixed] & \$0 [fixed] \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Two findings are stable across all three seeds. First, XGBoost and CatBoost are consistently and clearly ahead of both LightGBM and the logistic regression baseline on average precision and calibrated Brier Skill Score; the gap between XGBoost and CatBoost themselves, by contrast, is small enough -- and their ranges overlap closely enough -- that the two are not meaningfully distinguishable at this scale, and which of the two nominally leads is itself sensitive to the exact software environment (a second run of this same script in a different environment with slightly different library versions reordered them). Second, the economic outcome is close to zero for every model except logistic regression, consistent with the near-breakeven business case already established in Section~\ref{sec:scale} at this sample size -- model choice does not rescue an operating point that is fundamentally close to breakeven under the stated costs. Logistic regression is the one model where the gap is not noise: it is worse on every metric, including at its own oracle (upper-bound) threshold, indicating a genuine ranking-quality shortfall rather than sampling variance. Logistic regression's metrics do not vary across seeds because the \texttt{lbfgs} solver used here is deterministic given fixed data; \texttt{random\_state} affects only the three boosted-tree models' bagging behavior.
+Two findings are stable across all three seeds. First, XGBoost and CatBoost are higher than both LightGBM and the logistic regression baseline on average precision and calibrated Brier Skill Score in these three fixed-sample runs; the gap between XGBoost and CatBoost themselves, by contrast, is small enough -- and their ranges overlap closely enough -- that the two are not meaningfully distinguishable at this scale. Three algorithmic-randomness seeds on a single fixed sample do not establish statistical superiority of one over the other; both produced higher AP and calibrated BSS than LightGBM and logistic regression in these fixed-sample runs, which is the extent of what this experiment establishes. Second, the economic outcome is close to zero for every model, including logistic regression once its no-alert floor is correctly enforced by the threshold-search algorithm described above -- consistent with the near-breakeven business case already established in Section~\ref{sec:scale} at this sample size. Logistic regression's clearly weaker ranking (lowest AP and BSS of all four models) does not translate into a distinguishable economic loss here, since the near-breakeven regime means most models converge on ``flag little or nothing'' as the best available policy regardless of ranking quality. Logistic regression's metrics do not vary across seeds because the \texttt{lbfgs} solver used here is deterministic given fixed data; \texttt{random\_state} affects only the three boosted-tree models' bagging behavior.
+
+\textbf{What the three seeds do and do not establish.} These three seeds vary each boosted-tree model's own internal randomness (row and column subsampling) on a single, fixed 100-item sample -- they measure algorithmic-randomness variance only, not uncertainty from item selection, from a different chronological window, or from resampling the underlying series (which is what the independent 3-seed \emph{item-sampling} check in Section~\ref{sec:scale} measures at the 5{,}000-series scale). The findings above should be read as consistent across three algorithmic-randomness seeds on this fixed sample, not as a broader claim about sampling variance.
+
+\textbf{A data-reuse caveat.} The calibration period in this comparison serves three roles at once: early-stopping validation during model fitting, isotonic calibrator fitting, and ex-ante threshold selection. A four-way split with separate periods for each role would remove any risk of these roles interacting; we did not implement one here for compute-budget reasons, the same limitation already noted for Section~\ref{sec:calibration} below. This comparison is informative about relative model ranking; it is not a fully independent confirmation free of any shared-data risk.
 
 One additional nuance is worth reporting because it complicates a simple ``one model wins'' narrative: LightGBM's \emph{raw}, uncalibrated Brier score (0.084 across all three seeds) sits almost exactly at the prevalence-only reference (0.084), whereas XGBoost's and CatBoost's raw Brier scores (0.23--0.24 for both) are roughly 2.7 times worse than that same reference before calibration. LightGBM is, in this specific configuration, substantially better calibrated \emph{out of the box}, at the cost of weaker ranking. This is consistent with -- and does not contradict -- the paper's broader point in Section~\ref{sec:calibration}: ranking quality and calibration quality are separable properties of a model, and a library's default behavior on one does not predict its behavior on the other.
 
@@ -269,7 +277,7 @@ We conclude that XGBoost's original selection is reasonably well-supported on ra
 
 The unifying theme is that each finding required testing a specific mechanism rather than trusting a plausible aggregate metric. Chronological holdout was necessary but did not reveal future-informed label construction, a contemporaneous rolling feature, the proxy's grouping choice, or probability miscalibration.
 
-A grouping choice in a label definition is an estimand choice, not an implementation detail. Probability calibration and threshold selection are also distinct: calibration governs the meaning of scores; threshold selection governs action under stated costs or capacity. The appropriate Brier reference is essential because a large before/after improvement can coexist with only modest skill over prevalence. Section~\ref{sec:modelrobustness}'s model-family comparison shows these conclusions are not an artifact of the specific boosting library used, though it also shows that ``the best model'' is itself a comparison whose exact ranking is sensitive to the software environment: XGBoost and CatBoost tie on ranking and calibrated probability quality across two different environments in which this comparison was run, while LightGBM is consistently better calibrated in its raw, uncalibrated state.
+A grouping choice in a label definition is an estimand choice, not an implementation detail. Probability calibration and threshold selection are also distinct: calibration governs the meaning of scores; threshold selection governs action under stated costs or capacity. The appropriate Brier reference is essential because a large before/after improvement can coexist with only modest skill over prevalence. Section~\ref{sec:modelrobustness}'s model-family comparison shows these conclusions are not an artifact of the specific boosting library used, though it also shows that ``the best model'' is itself a comparison that depends on which metric is asked to arbitrate it: XGBoost and CatBoost are not meaningfully distinguishable on ranking and calibrated probability quality (Table~\ref{tab:modelrobust}), while LightGBM is better calibrated in its raw, uncalibrated state despite weaker ranking.
 
 \section{Limitations}
 
@@ -277,11 +285,18 @@ The label is not a verified stockout or disruption outcome; M5 contains no inven
 
 The model is evaluated on later observations from the same item-store series, not on unseen items, stores, or retailers. Research decisions were informed by earlier examinations of the original holdout, so this remains a retrospective case study rather than a preregistered confirmatory experiment. Full-catalog training uses a 20\% row sample of the training period. The cost values are illustrative, and 5{,}000-series results vary materially by seed. Threshold selection on the calibration period avoids final-period tuning, but the same calibration period also fits isotonic regression; a four-way split would provide an additional policy-selection set. Low recall at economically positive operating points makes the system a queue-prioritization aid, not autonomous detection.
 
-Reproduction uses Python 3.12.13, NumPy 2.4.6, pandas 2.3.3, scikit-learn 1.9.0, and XGBoost 3.3.0. The commands and machine-readable outputs are in \texttt{scripts/paper\_audit.py}, \texttt{scripts/train\_calibrate\_full\_catalog.py}, \texttt{scripts/model\_comparison\_robust.py}, and \texttt{paper\_draft/generated}. Code is available at \url{https://github.com/suhailyunus/supply-chain-stress-prediction}; an immutable release should be archived for submission.
+Reproduction uses Python 3.12.3, NumPy 2.4.4, scikit-learn 1.8.0, and XGBoost 3.4.1. The Section~\ref{sec:calibration} full-catalog results were generated with pandas 2.3.3; the Section~\ref{sec:modelrobustness} model-family comparison additionally uses LightGBM 4.7.0 and CatBoost 1.2.10, and was verified to produce equivalent results (AP within 0.001) under both pandas 2.3.3 and pandas 3.0.2, run back-to-back as a direct check rather than assumed. The commands and machine-readable outputs are in:
+\begin{itemize}[nosep,leftmargin=*]
+    \item \path{scripts/paper_audit.py}
+    \item \path{scripts/train_calibrate_full_catalog.py}
+    \item \path{scripts/model_comparison_robust.py}
+    \item \path{paper_draft/generated/}
+\end{itemize}
+Code is available at \url{https://github.com/suhailyunus/supply-chain-stress-prediction}; an immutable release should be archived for submission.
 
 \section{Conclusion}
 
-This case study shows that a proxy label can be predictable and still be misaligned with its intended meaning. Testing grouping choices exposed a strong volume association, temporal regression tests exposed two leakage mechanisms, and a proper prevalence reference tempered an initially overstated calibration claim. Isotonic calibration repaired overconfidence but added only modest Brier skill over prevalence. Under one global threshold and constant costs, calibration changed probability meaning far more than decision value, while a model-family robustness check confirmed these conclusions hold across gradient-boosting libraries. The broader lesson is procedural: validate the target estimand, the information set, probability meaning, and operating policy as separate objects.
+This case study shows that a proxy label can be predictable and still be misaligned with its intended meaning. Testing grouping choices exposed a strong volume association, temporal regression tests exposed two leakage mechanisms, and a proper prevalence reference tempered an initially overstated calibration claim. Isotonic calibration repaired overconfidence but added only modest Brier skill over prevalence. Under one global threshold and constant costs, calibration changed probability meaning far more than decision value, while a model-family robustness check supports the conclusion that these findings hold across gradient-boosting libraries. The broader lesson is procedural: validate the target estimand, the information set, probability meaning, and operating policy as separate objects.
 
 \begingroup
 \small
@@ -293,6 +308,21 @@ Chen, T. and Guestrin, C. (2016).
 \newblock XGBoost: A scalable tree boosting system.
 \newblock In \emph{Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining}, pages 785--794.
 
+\bibitem[Fr\'enay and Verleysen(2014)]{frenay2014classification}
+Fr\'enay, B. and Verleysen, M. (2014).
+\newblock Classification in the presence of label noise: A survey.
+\newblock \emph{IEEE Transactions on Neural Networks and Learning Systems}, 25(5):845--869.
+
+\bibitem[Guerdan et al.(2025)]{guerdan2025measurement}
+Guerdan, L., Saxena, D., Chancellor, S., Wu, Z.~S., and Holstein, K. (2025).
+\newblock Measurement as bricolage: Examining how data scientists construct target variables for predictive modeling tasks.
+\newblock \emph{Proceedings of the ACM on Human-Computer Interaction}, 9(CSCW).
+
+\bibitem[Hyndman et al.(2011)]{hyndman2011optimal}
+Hyndman, R.~J., Ahmed, R.~A., Athanasopoulos, G., and Shang, H.~L. (2011).
+\newblock Optimal combination forecasts for hierarchical time series.
+\newblock \emph{Computational Statistics \& Data Analysis}, 55(9):2579--2589.
+
 \bibitem[Kaufman et al.(2012)]{kaufman2012leakage}
 Kaufman, S., Rosset, S., Perlich, C., and Stitelman, O. (2012).
 \newblock Leakage in data mining: Formulation, detection, and avoidance.
@@ -302,6 +332,11 @@ Kaufman, S., Rosset, S., Perlich, C., and Stitelman, O. (2012).
 Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q., and Liu, T.-Y. (2017).
 \newblock LightGBM: A highly efficient gradient boosting decision tree.
 \newblock In \emph{Advances in Neural Information Processing Systems 30}, pages 3146--3154.
+
+\bibitem[Liu et al.(2025)]{liu2025machine}
+Liu, Y., Kalaitzi, D., Wang, M., and Papanagnou, C. (2025).
+\newblock A machine learning approach to inventory stockout prediction.
+\newblock \emph{Journal of Digital Economy}, 4:144--155.
 
 \bibitem[Makridakis et al.(2022)]{makridakis2022m5}
 Makridakis, S., Spiliotis, E., and Assimakopoulos, V. (2022).
@@ -313,6 +348,11 @@ Niculescu-Mizil, A. and Caruana, R. (2005).
 \newblock Predicting good probabilities with supervised learning.
 \newblock In \emph{Proceedings of the 22nd International Conference on Machine Learning}, pages 625--632.
 
+\bibitem[Obermeyer et al.(2019)]{obermeyer2019dissecting}
+Obermeyer, Z., Powers, B., Vogeli, C., and Mullainathan, S. (2019).
+\newblock Dissecting racial bias in an algorithm used to manage the health of populations.
+\newblock \emph{Science}, 366(6464):447--453.
+
 \bibitem[Platt(1999)]{platt1999probabilistic}
 Platt, J. (1999).
 \newblock Probabilistic outputs for support vector machines and comparison to regularized likelihood methods.
@@ -323,10 +363,20 @@ Prokhorenkova, L., Gusev, G., Vorobev, A., Dorogush, A.~V., and Gulin, A. (2018)
 \newblock CatBoost: Unbiased boosting with categorical features.
 \newblock In \emph{Advances in Neural Information Processing Systems 31}, pages 6638--6648.
 
+\bibitem[Ratner et al.(2017)]{ratner2017snorkel}
+Ratner, A., Bach, S.~H., Ehrenberg, H., Fries, J., Wu, S., and R\'e, C. (2017).
+\newblock Snorkel: Rapid training data creation with weak supervision.
+\newblock \emph{Proceedings of the VLDB Endowment}, 11(3):269--282.
+
 \bibitem[Syntetos et al.(2005)]{syntetos2005categorization}
 Syntetos, A.~A., Boylan, J.~E., and Croston, J.~D. (2005).
 \newblock On the categorization of demand patterns.
 \newblock \emph{Journal of the Operational Research Society}, 56(5):495--503.
+
+\bibitem[Wallace and Dahabreh(2012)]{wallace2012class}
+Wallace, B.~C. and Dahabreh, I.~J. (2012).
+\newblock Class probability estimates are unreliable for imbalanced data (and how to fix them).
+\newblock In \emph{Proceedings of the 12th IEEE International Conference on Data Mining}, pages 695--704.
 
 \bibitem[Zadrozny and Elkan(2002)]{zadrozny2002transforming}
 Zadrozny, B. and Elkan, C. (2002).
